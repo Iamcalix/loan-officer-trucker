@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Officer Day Report</title>
+<style>
+  :root { --bg:#0f172a; --panel:#1e293b; --line:#334155; --txt:#e2e8f0; --mut:#94a3b8; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--txt); font-family: system-ui,-apple-system,Segoe UI,Roboto,sans-serif; }
+  header { position:sticky; top:0; background:var(--panel); border-bottom:1px solid var(--line); padding:12px 20px; display:flex; gap:12px; align-items:center; flex-wrap:wrap; }
+  header h1 { font-size:16px; margin:0; flex:1; }
+  header input, header button, header a.btn { background:var(--bg); color:var(--txt); border:1px solid var(--line); border-radius:6px; padding:7px 10px; text-decoration:none; font-size:13px; }
+  header button, header a.btn { cursor:pointer; }
+  #wrap { max-width:1000px; margin:0 auto; padding:20px; }
+  .day-sum { color:var(--mut); font-size:13px; margin-bottom:16px; }
+  .officer { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:16px 18px; margin-bottom:16px; }
+  .officer h2 { font-size:16px; margin:0 0 2px; }
+  .officer .sub { color:var(--mut); font-size:12px; margin-bottom:10px; }
+  .stats { display:flex; flex-wrap:wrap; gap:14px; margin:10px 0 14px; }
+  .stat { background:var(--bg); border:1px solid var(--line); border-radius:8px; padding:8px 12px; min-width:96px; }
+  .stat .n { font-size:18px; font-weight:700; }
+  .stat .l { font-size:11px; color:var(--mut); }
+  table { width:100%; border-collapse:collapse; font-size:13px; margin-top:6px; }
+  th, td { text-align:left; padding:6px 8px; border-bottom:1px solid var(--line); }
+  th { color:var(--mut); font-weight:600; font-size:11px; text-transform:uppercase; letter-spacing:.03em; }
+  .tag { display:inline-block; font-size:11px; padding:1px 7px; border-radius:10px; }
+  .t-office { background:#1e3a8a; color:#bfdbfe; } .t-customer { background:#14532d; color:#bbf7d0; } .t-unknown { background:#7c2d12; color:#fed7aa; }
+  .muted { color:var(--mut); }
+  h3 { font-size:13px; margin:14px 0 4px; }
+  a { color:#93c5fd; }
+  .empty { color:var(--mut); padding:40px; text-align:center; }
+  @media print {
+    :root { --bg:#fff; --panel:#fff; --line:#ccc; --txt:#111; --mut:#555; }
+    header { position:static; } header .noprint { display:none; }
+    .officer { break-inside:avoid; border:1px solid #ccc; }
+    .stat, .tag { border:1px solid #ccc; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>Field Officer — Day Report</h1>
+  <input type="date" id="date" class="noprint" />
+  <button id="go" class="noprint">Load</button>
+  <button id="save" class="noprint">💾 Save file</button>
+  <button id="print" class="noprint">🖨 Print / PDF</button>
+  <a class="btn noprint" href="/reports">📁 Saved reports</a>
+  <a class="btn noprint" href="/">← Live map</a>
+</header>
+<div id="wrap"><div class="empty">Loading…</div></div>
+<script>
+const $ = (id) => document.getElementById(id);
+const pad = (n) => String(n).padStart(2, '0');
+// Format a unix-seconds instant as HH:MM in East Africa Time (UTC+3).
+function hm(sec) {
+  if (!sec) return '—';
+  const d = new Date((sec + 3 * 3600) * 1000);
+  return pad(d.getUTCHours()) + ':' + pad(d.getUTCMinutes());
+}
+function dur(min) {
+  if (!min) return '0m';
+  const h = Math.floor(min / 60), m = min % 60;
+  return (h ? h + 'h ' : '') + m + 'm';
+}
+function eatToday() { return new Date(Date.now() + 3 * 3600e3).toISOString().slice(0, 10); }
+
+async function load() {
+  const date = $('date').value || eatToday();
+  $('wrap').innerHTML = '<div class="empty">Loading ' + date + '…</div>';
+  let j;
+  try { j = await (await fetch('/api/report?date=' + date)).json(); }
+  catch { $('wrap').innerHTML = '<div class="empty">Failed to load report.</div>'; return; }
+  if (!j.officers || !j.officers.length) {
+    $('wrap').innerHTML = `<div class="empty">No field officers configured for ${date}.<br>
+      Add them on the <a href="/">live map</a> → “Manage officers”, then reload.</div>`;
+    return;
+  }
+  render(j);
+}
+
+function render(j) {
+  const totalVisits = j.officers.reduce((s, o) => s + o.customersMet, 0);
+  let html = `<div class="day-sum"><b>${j.date}</b> · ${j.officers.length} officer(s) · ${totalVisits} customer interaction(s)</div>`;
+  for (const o of j.officers) {
+    html += `<div class="officer">
+      <h2>${o.name}</h2>
+      <div class="sub">${o.area ? o.area + ' · ' : ''}on the road ${hm(o.firstSeen)}–${hm(o.lastSeen)}</div>
+      <div class="stats">
+        <div class="stat"><div class="n">${o.customersMet}</div><div class="l">customers met</div></div>
+        <div class="stat"><div class="n">${dur(o.withCustomersMin)}</div><div class="l">time with customers</div></div>
+        <div class="stat"><div class="n">${dur(o.officeMinutes)}</div><div class="l">at office</div></div>
+        <div class="stat"><div class="n">${o.distanceKm} km</div><div class="l">distance</div></div>
+        <div class="stat"><div class="n">${o.unexplained.length}</div><div class="l">unexplained stops</div></div>
+      </div>`;
+
+    if (o.visits.length) {
+      html += `<h3>Customers interacted with</h3><table>
+        <tr><th>Customer</th><th>Total time</th><th>Visits</th><th>Times</th></tr>`;
+      for (const v of o.visits) {
+        html += `<tr><td>${v.name}${v.phone ? ' <span class="muted">' + v.phone + '</span>' : ''}</td>
+          <td><b>${dur(v.minutes)}</b></td><td>${v.stops.length}</td>
+          <td class="muted">${v.stops.map((s) => hm(s.start) + '–' + hm(s.end)).join(', ')}</td></tr>`;
+      }
+      html += `</table>`;
+    } else {
+      html += `<div class="muted" style="padding:6px 0">No customer interactions detected.</div>`;
+    }
+
+    html += `<h3>Whereabouts timeline</h3><table>
+      <tr><th>From</th><th>To</th><th>Duration</th><th>Place</th></tr>`;
+    if (o.timeline.length) {
+      for (const t of o.timeline) {
+        const tag = t.type === 'customer' ? 't-customer' : t.type === 'office' ? 't-office' : 't-unknown';
+        const label = t.type === 'customer' ? ('Customer: ' + t.name)
+          : t.type === 'office' ? (t.name || 'Office')
+          : `<a href="https://www.google.com/maps?q=${t.lat},${t.lng}" target="_blank">Unexplained stop</a>`;
+        html += `<tr><td>${hm(t.start)}</td><td>${hm(t.end)}</td><td>${dur(t.minutes)}</td>
+          <td><span class="tag ${tag}">${label}</span></td></tr>`;
+      }
+    } else {
+      html += `<tr><td colspan="4" class="muted">No stops ≥ threshold — officer was moving or had no fixes.</td></tr>`;
+    }
+    html += `</table></div>`;
+  }
+  $('wrap').innerHTML = html;
+}
+
+$('date').value = eatToday();
+$('go').onclick = load;
+$('print').onclick = () => window.print();
+$('save').onclick = async () => {
+  const date = $('date').value || eatToday();
+  $('save').textContent = 'Saving…'; $('save').disabled = true;
+  try {
+    const r = await (await fetch('/api/reports/generate', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ date }),
+    })).json();
+    if (!r.ok) throw new Error(r.error || 'failed');
+    $('save').textContent = '✓ Saved';
+    setTimeout(() => { $('save').textContent = '💾 Save file'; $('save').disabled = false; }, 1500);
+  } catch (e) { alert('Save failed: ' + e.message); $('save').textContent = '💾 Save file'; $('save').disabled = false; }
+};
+load();
+</script>
+</body>
+</html>

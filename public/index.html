@@ -1,0 +1,436 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Field Officer Tracker</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<style>
+  :root { --bg:#0f172a; --panel:#1e293b; --line:#334155; --txt:#e2e8f0; --mut:#94a3b8; --accent:#38bdf8; }
+  * { box-sizing: border-box; }
+  html, body { margin:0; height:100%; font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; color:var(--txt); }
+  #app { display:flex; height:100%; }
+  #side { width:300px; background:var(--panel); border-right:1px solid var(--line); display:flex; flex-direction:column; }
+  #head { padding:12px 14px; border-bottom:1px solid var(--line); }
+  #head h1 { font-size:15px; margin:0 0 4px; }
+  #meta { font-size:12px; color:var(--mut); }
+  #search { margin:8px 0 0; width:100%; padding:7px 9px; background:var(--bg); border:1px solid var(--line); border-radius:6px; color:var(--txt); }
+  #list { overflow:auto; flex:1; }
+  .item { padding:9px 14px; border-bottom:1px solid var(--line); cursor:pointer; font-size:13px; }
+  .item:hover { background:#243044; }
+  .item.sel { background:#134155; }
+  .item .nm { font-weight:600; }
+  .item .sub { color:var(--mut); font-size:11px; margin-top:2px; }
+  .dot { display:inline-block; width:8px; height:8px; border-radius:50%; margin-right:6px; vertical-align:middle; }
+  .on { background:#22c55e; } .off { background:#64748b; }
+  .badge { display:inline-block; font-size:10px; padding:1px 6px; border-radius:10px; margin-top:3px; }
+  .b-office { background:#1e3a8a; color:#bfdbfe; }
+  .b-customer { background:#14532d; color:#bbf7d0; }
+  .b-moving { background:#334155; color:#cbd5e1; }
+  .b-stopped { background:#7c2d12; color:#fed7aa; }
+  .b-offline { background:#450a0a; color:#fca5a5; }
+  #main { flex:1; position:relative; }
+  #map { position:absolute; inset:0; }
+  #summary { position:absolute; z-index:1000; left:12px; top:12px; width:270px; max-height:calc(100% - 24px); overflow:auto;
+             background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:12px; font-size:12px; display:none; }
+  #summary.show { display:block; }
+  #summary h2 { font-size:13px; margin:0 0 6px; }
+  #summary .row { padding:6px 0; border-top:1px solid var(--line); }
+  #summary .k { color:var(--mut); }
+  #summary .warn { color:#fca5a5; }
+  #summary .ok { color:#bbf7d0; }
+  #manage { margin-top:8px; width:100%; padding:7px; background:var(--accent); color:#04222f; border:0; border-radius:6px; font-weight:700; cursor:pointer; }
+  /* Officer picker modal */
+  #modal { position:fixed; inset:0; background:rgba(2,6,23,.7); z-index:2000; display:none; align-items:center; justify-content:center; }
+  #modal.show { display:flex; }
+  #panel { width:640px; max-width:94vw; height:80vh; background:var(--panel); border:1px solid var(--line); border-radius:12px; display:flex; flex-direction:column; }
+  #panel .top { padding:12px 14px; border-bottom:1px solid var(--line); display:flex; gap:10px; align-items:center; }
+  #panel .top h2 { font-size:15px; margin:0; flex:1; }
+  #psearch { flex:1; padding:7px 9px; background:var(--bg); border:1px solid var(--line); border-radius:6px; color:var(--txt); }
+  #panel .rows { flex:1; overflow:auto; }
+  .drow { display:grid; grid-template-columns:26px 1fr 130px 110px; gap:8px; align-items:center; padding:7px 14px; border-bottom:1px solid var(--line); font-size:12px; }
+  .drow.on { background:#12324a; }
+  .drow .dn { font-weight:600; } .drow .di { color:var(--mut); font-size:11px; }
+  .drow input[type=text] { width:100%; padding:4px 6px; background:var(--bg); border:1px solid var(--line); border-radius:5px; color:var(--txt); font-size:12px; }
+  .drow input[type=text]:disabled { opacity:.35; }
+  #panel .foot { padding:12px 14px; border-top:1px solid var(--line); display:flex; gap:10px; align-items:center; justify-content:flex-end; }
+  #panel .foot .cnt { margin-right:auto; color:var(--mut); font-size:12px; }
+  #panel button.save { background:#22c55e; color:#052e16; border:0; padding:8px 16px; border-radius:6px; font-weight:700; cursor:pointer; }
+  #panel button.cancel { background:transparent; color:var(--mut); border:1px solid var(--line); padding:8px 14px; border-radius:6px; cursor:pointer; }
+  #bar { position:absolute; z-index:1000; left:50%; transform:translateX(-50%); bottom:14px;
+         background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:10px 14px;
+         display:none; align-items:center; gap:10px; box-shadow:0 6px 24px rgba(0,0,0,.4); max-width:90%; }
+  #bar.show { display:flex; }
+  #bar button { background:var(--accent); border:0; color:#04222f; font-weight:700; border-radius:6px; padding:6px 12px; cursor:pointer; }
+  #bar input[type=range] { width:220px; }
+  #bar .lbl { font-size:12px; color:var(--mut); white-space:nowrap; }
+  #hctl { position:absolute; z-index:1000; right:12px; top:12px; background:var(--panel); border:1px solid var(--line);
+          border-radius:10px; padding:10px 12px; font-size:12px; display:flex; gap:8px; align-items:center; }
+  #hctl select, #hctl button { background:var(--bg); color:var(--txt); border:1px solid var(--line); border-radius:6px; padding:5px 8px; }
+  #hctl button { cursor:pointer; }
+  .leaflet-tooltip.lbl { background:#0b1220; color:#e2e8f0; border:1px solid var(--line); }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="side">
+    <div id="head">
+      <h1>Field Officer Tracker</h1>
+      <div id="meta">loading…</div>
+      <input id="search" placeholder="Search officer…" />
+      <button id="manage">⚙ Manage officers</button>
+      <a href="/report.html" style="display:block;text-align:center;margin-top:6px;padding:7px;background:var(--bg);border:1px solid var(--line);border-radius:6px;color:var(--accent);text-decoration:none;font-size:13px">📄 Day report</a>
+    </div>
+    <div id="list"></div>
+  </div>
+  <div id="main">
+    <div id="map"></div>
+    <div id="summary"></div>
+    <div id="hctl">
+      <span>History:</span>
+      <select id="hours">
+        <option value="2">last 2h</option>
+        <option value="4">last 4h</option>
+        <option value="8" selected>last 8h</option>
+        <option value="12">last 12h</option>
+        <option value="24">last 24h</option>
+      </select>
+      <button id="live">↩ Live</button>
+      <label style="display:flex;gap:5px;align-items:center;cursor:pointer"><input type="checkbox" id="showCust" checked /> Customer bikes</label>
+    </div>
+    <div id="bar">
+      <button id="play">▶</button>
+      <input id="slider" type="range" min="0" max="0" value="0" />
+      <span class="lbl" id="tlabel"></span>
+    </div>
+  </div>
+</div>
+
+<div id="modal">
+  <div id="panel">
+    <div class="top">
+      <h2>Select field-officer bikes</h2>
+      <input id="psearch" placeholder="Search bike plate or IMEI…" />
+    </div>
+    <div class="rows" id="prows"></div>
+    <div class="foot">
+      <span class="cnt" id="pcnt"></span>
+      <button class="cancel" id="pcancel">Cancel</button>
+      <button class="save" id="psave">Save</button>
+    </div>
+  </div>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+const map = L.map('map', { zoomControl: true }).setView([-6.8, 39.28], 12); // Dar es Salaam default
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+  maxZoom: 19, attribution: '&copy; OpenStreetMap'
+}).addTo(map);
+
+const markers = new Map();   // imei -> L.marker (live)
+let officers = [];           // latest snapshot
+let selected = null;         // imei in history mode
+let hasRoster = false;       // whether loan-officer bikes are configured
+let routeLayer = null, cursor = null, playTimer = null, points = [];
+let custLayer = null;
+
+const $ = (id) => document.getElementById(id);
+const fmt = (s) => s ? new Date(s * 1000).toLocaleString() : '—';
+const hm = (s) => s ? new Date(s * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '—';
+
+const STATE_COLOR = { office: '#3b82f6', customer: '#22c55e', moving: '#94a3b8', stopped: '#f97316', offline: '#ef4444' };
+function stateColor(state) { return STATE_COLOR[state] || '#94a3b8'; }
+
+function personIcon(state) {
+  const c = stateColor(state);
+  return L.divIcon({
+    className: '', iconSize: [22, 22], iconAnchor: [11, 11],
+    html: `<div style="width:22px;height:22px;border-radius:50%;border:2px solid #fff;
+      background:${c};box-shadow:0 0 0 2px rgba(0,0,0,.35)"></div>`
+  });
+}
+
+// Draw the office marker + geofence once.
+async function loadPlaces() {
+  try {
+    const j = await (await fetch('/api/places')).json();
+    if (j.office && isFinite(j.office.lat)) {
+      L.circle([j.office.lat, j.office.lng], { radius: j.office.radiusM, color: '#3b82f6', fillOpacity: .08 }).addTo(map);
+      L.marker([j.office.lat, j.office.lng]).addTo(map).bindTooltip('🏢 ' + j.office.name, { permanent: true, direction: 'top', className: 'lbl' });
+      map.setView([j.office.lat, j.office.lng], 13);
+    }
+  } catch { /* office optional */ }
+}
+
+async function loadLive() {
+  try {
+    const r = await fetch('/api/officers');
+    const j = await r.json();
+    officers = j.officers || [];
+    hasRoster = !!j.hasRoster;
+    const when = new Date().toLocaleTimeString();
+    $('meta').textContent = hasRoster
+      ? `${officers.length} officer${officers.length === 1 ? '' : 's'} · updated ${when}`
+      : `No loan-officer bikes set yet — showing customers · ${when}`;
+    renderList();
+    if (!selected) renderMarkers();
+  } catch (e) { $('meta').textContent = 'error loading live data'; }
+}
+
+// Faint dots for every customer bike (background context). Refreshed slowly.
+async function loadCustomers() {
+  if (!$('showCust').checked) { if (custLayer) { map.removeLayer(custLayer); custLayer = null; } return; }
+  try {
+    const j = await (await fetch('/api/customers')).json();
+    if (custLayer) map.removeLayer(custLayer);
+    custLayer = L.layerGroup();
+    for (const c of (j.customers || [])) {
+      L.circleMarker([c.lat, c.lng], { radius: 3, color: '#64748b', weight: 1, fillColor: '#94a3b8', fillOpacity: .6 })
+        .bindTooltip(c.name, { className: 'lbl' })
+        .addTo(custLayer);
+    }
+    if (!selected) custLayer.addTo(map);
+  } catch { /* customers optional */ }
+}
+
+function renderMarkers() {
+  const seen = new Set();
+  for (const o of officers) {
+    seen.add(o.imei);
+    const state = o.status?.state || 'moving';
+    const tip = `${o.name} — ${o.status?.text || ''}`;
+    let m = markers.get(o.imei);
+    if (!m) {
+      m = L.marker([o.lat, o.lng], { icon: personIcon(state) })
+        .addTo(map).bindTooltip(tip, { className: 'lbl', direction: 'top' });
+      m.on('click', () => selectOfficer(o.imei));
+      markers.set(o.imei, m);
+    } else {
+      m.setLatLng([o.lat, o.lng]);
+      m.setIcon(personIcon(state));
+      m.setTooltipContent(tip);
+    }
+  }
+  for (const [imei, m] of markers) if (!seen.has(imei)) { map.removeLayer(m); markers.delete(imei); }
+}
+
+function clearMarkers() { for (const [, m] of markers) map.removeLayer(m); markers.clear(); }
+
+function renderList() {
+  const q = ($('search').value || '').toLowerCase();
+  const el = $('list');
+  el.innerHTML = '';
+  if (!officers.length) {
+    el.innerHTML = `<div style="padding:14px;color:var(--mut);font-size:12px;line-height:1.5">
+      No loan-officer bikes configured yet.<br>Customer bikes are shown as faint dots on the map.<br><br>
+      Send the officer bike list to activate visit tracking.</div>`;
+    return;
+  }
+  for (const o of officers) {
+    if (q && !(`${o.name} ${o.area || ''} ${o.imei}`.toLowerCase().includes(q))) continue;
+    const st = o.status || { state: 'moving', text: '' };
+    const d = document.createElement('div');
+    d.className = 'item' + (o.imei === selected ? ' sel' : '');
+    d.innerHTML = `<div class="nm"><span class="dot" style="background:${stateColor(st.state)}"></span>${o.name}</div>
+      <div class="sub">${o.area ? o.area + ' · ' : ''}${o.imei}</div>
+      <span class="badge b-${st.state}">${st.text}</span>`;
+    d.onclick = () => selectOfficer(o.imei);
+    el.appendChild(d);
+  }
+}
+
+async function selectOfficer(imei) {
+  selected = imei;
+  renderList();
+  clearMarkers();
+  if (custLayer) map.removeLayer(custLayer); // clean map for the route
+  const hours = $('hours').value;
+  try {
+    const r = await fetch(`/api/officers/${encodeURIComponent(imei)}/history?hours=${hours}`);
+    const j = await r.json();
+    drawRoute(j);
+  } catch (e) { alert('Failed to load history'); goLive(); }
+}
+
+function drawRoute(j) {
+  points = j.points || [];
+  if (routeLayer) { map.removeLayer(routeLayer); routeLayer = null; }
+  if (cursor) { map.removeLayer(cursor); cursor = null; }
+  const name = (officers.find((o) => o.imei === j.imei) || {}).name || j.imei;
+  if (!points.length) {
+    // No track — drop the current pin if we have it.
+    if (j.current && isFinite(j.current.lat)) {
+      cursor = L.marker([j.current.lat, j.current.lng]).addTo(map)
+        .bindPopup(`<b>${name}</b><br>${j.current.address || ''}<br>${fmt(j.current.gpsTime)}`).openPopup();
+      map.setView([j.current.lat, j.current.lng], 15);
+    }
+    $('bar').classList.remove('show');
+    $('meta').textContent = `${name}: no track in window`;
+    renderSummary(name, j);
+    return;
+  }
+  const latlngs = points.map((p) => [p.lat, p.lng]);
+  routeLayer = L.layerGroup().addTo(map);
+  const line = L.polyline(latlngs, { color: '#38bdf8', weight: 4, opacity: .85 }).addTo(routeLayer);
+  L.circleMarker(latlngs[0], { radius: 6, color: '#22c55e', fillOpacity: 1 }).addTo(routeLayer).bindTooltip('start');
+
+  // Stop markers, coloured by classification.
+  for (const st of (j.stops || [])) {
+    const c = st.place?.type === 'customer' ? '#22c55e' : st.place?.type === 'office' ? '#3b82f6' : '#f97316';
+    const label = st.place?.name || 'Unexplained stop';
+    L.circleMarker([st.lat, st.lng], { radius: 8, color: c, weight: 2, fillOpacity: .5 })
+      .addTo(routeLayer)
+      .bindPopup(`<b>${label}</b><br>${st.minutes} min<br>${hm(st.start)} → ${hm(st.end)}`);
+  }
+
+  cursor = L.marker(latlngs[latlngs.length - 1]).addTo(routeLayer);
+  map.fitBounds(line.getBounds().pad(0.2));
+  const s = $('slider'); s.min = 0; s.max = points.length - 1; s.value = points.length - 1;
+  updateCursor(points.length - 1);
+  $('bar').classList.add('show');
+  const km = totalKm(points).toFixed(1);
+  $('meta').textContent = `${name}: ${points.length} points · ${km} km · ${fmt(points[0].gpsSec)} → ${fmt(points.at(-1).gpsSec)}`;
+  renderSummary(name, j);
+}
+
+function renderSummary(name, j) {
+  const el = $('summary');
+  const visits = j.visits || [];
+  const unexp = j.unexplained || [];
+  let html = `<h2>${name}</h2>`;
+  html += `<div class="row"><span class="k">Customers met:</span> <b>${visits.length}</b></div>`;
+  for (const v of visits) {
+    html += `<div class="row ok">✓ ${v.name} — <b>${v.minutes} min</b>` +
+      (v.stops.length > 1 ? ` <span class="k">(${v.stops.length} stops)</span>` : '') +
+      `<br><span class="k">${v.stops.map((s) => hm(s.start)).join(', ')}</span></div>`;
+  }
+  if (j.officeMinutes) html += `<div class="row"><span class="k">At office:</span> <b>${j.officeMinutes} min</b></div>`;
+  html += `<div class="row"><span class="k">Unexplained stops:</span> <b class="${unexp.length ? 'warn' : ''}">${unexp.length}</b></div>`;
+  for (const u of unexp) {
+    html += `<div class="row warn">⚠ Stopped ${u.minutes} min <span class="k">${hm(u.start)}→${hm(u.end)}</span>` +
+      ` <a href="https://www.google.com/maps?q=${u.lat},${u.lng}" target="_blank" style="color:#93c5fd">map</a></div>`;
+  }
+  el.innerHTML = html;
+  el.classList.add('show');
+}
+
+function totalKm(pts) {
+  let m = 0;
+  for (let i = 1; i < pts.length; i++) m += haversine(pts[i - 1], pts[i]);
+  return m / 1000;
+}
+function haversine(a, b) {
+  const R = 6371000, toR = Math.PI / 180;
+  const dLat = (b.lat - a.lat) * toR, dLng = (b.lng - a.lng) * toR;
+  const s = Math.sin(dLat / 2) ** 2 + Math.cos(a.lat * toR) * Math.cos(b.lat * toR) * Math.sin(dLng / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(s));
+}
+
+function updateCursor(i) {
+  const p = points[i]; if (!p || !cursor) return;
+  cursor.setLatLng([p.lat, p.lng]);
+  $('tlabel').textContent = `${fmt(p.gpsSec)} · ${Math.round(p.speed)} km/h${p.accOn === false ? ' · ACC off' : ''}`;
+}
+
+$('slider').oninput = (e) => updateCursor(Number(e.target.value));
+$('play').onclick = () => {
+  if (playTimer) { clearInterval(playTimer); playTimer = null; $('play').textContent = '▶'; return; }
+  $('play').textContent = '⏸';
+  const s = $('slider');
+  if (Number(s.value) >= Number(s.max)) s.value = 0;
+  playTimer = setInterval(() => {
+    let v = Number(s.value) + 1;
+    if (v > Number(s.max)) { clearInterval(playTimer); playTimer = null; $('play').textContent = '▶'; return; }
+    s.value = v; updateCursor(v);
+  }, 250);
+};
+$('hours').onchange = () => { if (selected) selectOfficer(selected); };
+$('search').oninput = renderList;
+$('live').onclick = goLive;
+
+function goLive() {
+  if (playTimer) { clearInterval(playTimer); playTimer = null; $('play').textContent = '▶'; }
+  selected = null;
+  if (routeLayer) { map.removeLayer(routeLayer); routeLayer = null; }
+  if (cursor) { map.removeLayer(cursor); cursor = null; }
+  $('bar').classList.remove('show');
+  $('summary').classList.remove('show');
+  renderList(); renderMarkers();
+  if (custLayer && $('showCust').checked) custLayer.addTo(map);
+}
+
+$('showCust').onchange = loadCustomers;
+
+// ---- Officer picker modal ----
+function updatePcnt() {
+  const n = document.querySelectorAll('#prows input.chk:checked').length;
+  $('pcnt').textContent = `${n} officer${n === 1 ? '' : 's'} selected`;
+}
+async function openManage() {
+  $('prows').innerHTML = '<div style="padding:16px;color:#94a3b8">Loading bikes…</div>';
+  $('modal').classList.add('show');
+  const j = await (await fetch('/api/devices')).json();
+  const rows = (j.devices || []).map((d) => {
+    const on = d.isOfficer;
+    return `<label class="drow${on ? ' on' : ''}">
+      <input type="checkbox" class="chk" data-imei="${d.imei}" ${on ? 'checked' : ''}/>
+      <span><span class="dn">${d.name}</span><br><span class="di">${d.imei}</span></span>
+      <input type="text" class="oname" placeholder="Officer name" value="${(d.officer?.name || '').replace(/"/g, '&quot;')}" ${on ? '' : 'disabled'}/>
+      <input type="text" class="oarea" placeholder="Area" value="${(d.officer?.area || '').replace(/"/g, '&quot;')}" ${on ? '' : 'disabled'}/>
+    </label>`;
+  }).join('');
+  $('prows').innerHTML = rows || '<div style="padding:16px">No bikes found.</div>';
+  $('prows').querySelectorAll('.drow').forEach((row) => {
+    const chk = row.querySelector('.chk');
+    chk.onchange = () => {
+      row.classList.toggle('on', chk.checked);
+      row.querySelectorAll('input[type=text]').forEach((i) => { i.disabled = !chk.checked; });
+      updatePcnt();
+    };
+  });
+  updatePcnt();
+}
+$('manage').onclick = openManage;
+$('pcancel').onclick = () => $('modal').classList.remove('show');
+$('modal').onclick = (e) => { if (e.target.id === 'modal') $('modal').classList.remove('show'); };
+$('psearch').oninput = (e) => {
+  const q = e.target.value.toLowerCase();
+  $('prows').querySelectorAll('.drow').forEach((row) => {
+    const t = row.textContent.toLowerCase();
+    const checked = row.querySelector('.chk').checked;
+    row.style.display = (!q || t.includes(q) || checked) ? '' : 'none';
+  });
+};
+$('psave').onclick = async () => {
+  const officers = {};
+  $('prows').querySelectorAll('.chk:checked').forEach((chk) => {
+    const row = chk.closest('.drow');
+    officers[chk.dataset.imei] = {
+      name: row.querySelector('.oname').value.trim(),
+      area: row.querySelector('.oarea').value.trim(),
+    };
+  });
+  $('psave').textContent = 'Saving…'; $('psave').disabled = true;
+  try {
+    const r = await fetch('/api/roster', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ officers }),
+    });
+    const j = await r.json();
+    if (!j.ok) throw new Error(j.error || 'save failed');
+    $('modal').classList.remove('show');
+    selected = null;
+    await loadLive(); await loadCustomers();
+  } catch (e) { alert('Save failed: ' + e.message); }
+  finally { $('psave').textContent = 'Save'; $('psave').disabled = false; }
+};
+
+loadPlaces();
+loadLive();
+loadCustomers();
+setInterval(loadLive, 15000);
+setInterval(loadCustomers, 60000);
+</script>
+</body>
+</html>

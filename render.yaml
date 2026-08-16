@@ -1,0 +1,32 @@
+services:
+  - type: web
+    name: officer-tracker
+    runtime: node
+    plan: starter
+    buildCommand: "npm install"
+    startCommand: "node src/server.js"
+    disk:
+      name: reports
+      mountPath: /var/data
+      sizeGB: 1
+    envVars:
+      - key: WANWAY_APPID
+        sync: false
+      - key: WANWAY_API_KEY
+        sync: false
+      - key: OFFICE_NAME
+        value: "Head Office"
+      - key: OFFICE_LAT
+        value: "-6.8901105"
+      - key: OFFICE_LNG
+        value: "39.2924842"
+      - key: OFFICE_RADIUS_M
+        value: "120"
+      - key: OFFLINE_AFTER_MIN
+        value: "25"
+      - key: LIVE_CACHE_MS
+        value: "15000"
+      - key: REPORTS_DIR
+        value: "/var/data/reports"
+      - key: REPORT_HOUR_EAT
+        value: "21"

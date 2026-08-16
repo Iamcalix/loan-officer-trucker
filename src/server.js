@@ -125,7 +125,10 @@ async function makeReport(date) {
 }
 
 // -------------------------------- routing ------------------------------------
-const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.ico': 'image/x-icon' };
+const MIME = {
+  '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json',
+  '.ico': 'image/x-icon', '.png': 'image/png', '.svg': 'image/svg+xml', '.gif': 'image/gif',
+};
 
 function readBody(req) {
   return new Promise((resolve, reject) => {

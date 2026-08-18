@@ -8,7 +8,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { config, assertConfigured } from './config.js';
 import { createFleetClient } from './fleet.js';
-import { officerFor, officerImeis, hasRoster, saveRoster } from './officers.js';
+import { officerFor, officerImeis, hasRoster, saveRoster, initRoster } from './officers.js';
 import { classify, officePlace, customerCount, setLiveCustomers } from './places.js';
 import { analyzeTrack } from './visits.js';
 import { buildReport, writeReportFiles, listReports, eatToday } from './report.js';
@@ -227,7 +227,7 @@ const server = http.createServer(async (req, res) => {
           phone: String(v?.phone || '').trim().slice(0, 30),
         };
       }
-      saveRoster(clean);
+      await saveRoster(clean);
       snapCache = { at: 0, data: null, promise: null }; // rebuild officers on next read
       return sendJson(res, 200, { ok: true, count: Object.keys(clean).length });
     }
@@ -319,6 +319,11 @@ const server = http.createServer(async (req, res) => {
 });
 
 assertConfigured();
+// Seed the officer roster from durable storage (Supabase) before serving, then
+// refresh it periodically so a roster edited elsewhere is picked up.
+await initRoster();
+setInterval(() => { initRoster().catch(() => {}); }, 60_000).unref();
+
 server.listen(config.port, () => {
   console.log(`officer-tracker listening on http://localhost:${config.port}`);
 });

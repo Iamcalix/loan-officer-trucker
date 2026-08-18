@@ -33,6 +33,14 @@ export const config = {
     mapType: process.env.GPS_MAP_TYPE || 'google',
   },
 
+  // Supabase — durable storage for the officer roster (Render's free disk is
+  // ephemeral and wipes officers.json on restart). Uses the SECRET service key,
+  // server-side only. Unset → falls back to the local data/officers.json file.
+  supabase: {
+    url: (process.env.SUPABASE_URL || '').replace(/\/+$/, ''),
+    key: process.env.SUPABASE_KEY || process.env.SUPABASE_SERVICE_KEY || '',
+  },
+
   httpTimeoutMs: num(process.env.HTTP_TIMEOUT_MS, 15000),
   // How stale a signal may be before an officer is shown "offline" (minutes).
   offlineAfterMin: num(process.env.OFFLINE_AFTER_MIN, 25),

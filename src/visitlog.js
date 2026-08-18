@@ -12,11 +12,16 @@
 //               start_ts, end_ts, seconds, updated_at)
 // unique(day, officer_imei, customer_plate, start_ts)
 
-import { supabaseEnabled, sb, sbSelect, sbInsert } from './supa.js';
+import { config } from './config.js';
+import { supabaseEnabled, sb, sbSelect } from './supa.js';
 import { customerByPlate } from './register.js';
 
 const normPlate = (s) => String(s || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
 const eatDay = (sec) => new Date((sec + 3 * 3600) * 1000).toISOString().slice(0, 10);
+// A real "visit" = officer parked NEAR a customer for at least this long. Anything
+// shorter is a drive-by (a rider passes dozens of parked customer bikes a day) and
+// must NOT count — this is what made the live badge read 49 vs the report's 1.
+const MIN_VISIT_SEC = () => config.proximity.stopMinMinutes * 60;
 
 // officerImei -> { day, plate, name, startTs, lastTs, lastPersist }
 const open = new Map();
@@ -39,9 +44,12 @@ async function persist(officerImei, s) {
 }
 
 // Record one officer's current classification. `place` is the classify() result
-// (a {type:'customer', id, name} or office/null). nowSec = sample time.
-export async function record(officerImei, place, nowSec) {
-  const isCust = place && place.type === 'customer';
+// (a {type:'customer', id, name} or office/null). nowSec = sample time. speedKmh
+// is the officer's live speed — only a STATIONARY officer counts as "with" the
+// customer, so riding past a parked customer bike is ignored.
+export async function record(officerImei, place, nowSec, speedKmh) {
+  const stationary = speedKmh == null ? true : speedKmh <= config.proximity.stopSpeedKmh;
+  const isCust = Boolean(place && place.type === 'customer' && stationary);
   const plate = isCust ? normPlate(place.name) : null;
   const cur = open.get(officerImei);
 
@@ -65,8 +73,9 @@ export async function record(officerImei, place, nowSec) {
 // place). Called from buildSnapshot so it runs on every dashboard refresh.
 export async function sampleFromRows(rows, nowSec) {
   for (const r of rows) {
-    // r.place is the map snapshot's place ({type,name,distM}) or null
-    await record(r.imei, r.place, nowSec).catch(() => {});
+    // r.place is the map snapshot's place ({type,name,distM}) or null; r.speedKmh
+    // gates out drive-bys.
+    await record(r.imei, r.place, nowSec, r.speedKmh).catch(() => {});
   }
 }
 
@@ -85,10 +94,13 @@ export async function getVisits(day) {
     v.stops.push({ start: r.start_ts, end: r.end_ts, minutes: Math.round((r.seconds || 0) / 60) });
     perCust.set(key, v);
   }
-  // → Map(officerImei -> [visit,...])
+  // → Map(officerImei -> [visit,...]), keeping only customers the officer actually
+  // spent real time with (filters drive-by proximity that would inflate the count).
+  const minMin = Math.max(1, Math.round(MIN_VISIT_SEC() / 60));
   const out = new Map();
   for (const [imei, perCust] of byOfficer) {
-    out.set(imei, [...perCust.values()].sort((a, b) => b.minutes - a.minutes));
+    const kept = [...perCust.values()].filter((v) => v.minutes >= minMin).sort((a, b) => b.minutes - a.minutes);
+    if (kept.length) out.set(imei, kept);
   }
   return out;
 }

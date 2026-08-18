@@ -368,19 +368,34 @@ const server = http.createServer(async (req, res) => {
       const start = Number(url.searchParams.get('start')) || now - (Number.isFinite(hours) && hours > 0 ? hours : 8) * 3600;
       const end = Number(url.searchParams.get('end')) || now;
       await refreshCustomerGeofence();
-      const [points, status, loc] = await Promise.all([
+      const [points, status, loc, dayVisits, plateIdx, locs] = await Promise.all([
         gps.history(imei, start, end),
         gps.status(imei).catch(() => null),
         gps.location(imei).catch(() => null),
+        getVisits(eatToday()).catch(() => new Map()),
+        getPlateIndex().catch(() => new Map()),
+        getLiveLocations().catch(() => []),
       ]);
       const analysis = analyzeTrack(points);
+      // "Customers met" must match the sidebar/report → use the live visit log,
+      // NOT the history analysis (18gps has no history; Wanway history under-counts).
+      // Attach each met customer's current position so the map can pin the visits
+      // even when there's no GPS route (18gps). The route line + stop markers still
+      // come from history (best-effort, Wanway only).
+      const liveByImei = new Map(locs.map((l) => [l.imei, l]));
+      const visits = (dayVisits.get(imei) || []).map((v) => {
+        let pos = null;
+        for (const im of (plateIdx.get(v.plate) || [])) { const l = liveByImei.get(im); if (l) { pos = l; break; } }
+        return { ...v, lat: pos ? pos.lat : null, lng: pos ? pos.lng : null };
+      });
       return sendJson(res, 200, {
         imei, start, end, status, current: loc,
         count: points.length, points,
         stops: analysis.stops,
-        visits: analysis.visits,
+        visits,
         officeMinutes: analysis.officeMinutes,
         unexplained: analysis.unexplained,
+        visitSource: 'live',
       });
     }
 

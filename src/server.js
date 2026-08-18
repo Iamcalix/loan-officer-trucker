@@ -7,7 +7,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { config, assertConfigured } from './config.js';
-import { createGpsClient } from './gps.js';
+import { createFleetClient } from './fleet.js';
 import { officerFor, officerImeis, hasRoster, saveRoster } from './officers.js';
 import { classify, officePlace, customerCount, setLiveCustomers } from './places.js';
 import { analyzeTrack } from './visits.js';
@@ -17,7 +17,7 @@ import { startReportScheduler } from './scheduler.js';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
 
-const gps = createGpsClient();
+const gps = createFleetClient();
 
 // ---- live snapshot: bulk positions + device names, merged & cached briefly ----
 let snapCache = { at: 0, data: null, promise: null };

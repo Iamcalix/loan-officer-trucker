@@ -20,6 +20,19 @@ export const config = {
     accountId: process.env.WANWAY_ACCOUNT_ID || '', // '' = the token's own root account
   },
 
+  // 18gps Open API (api.18gps.net). The MAJORITY of the fleet lives here, not on
+  // Wanway — a bike like MC563EUD is only visible via this platform. Same creds as
+  // smart-collector (GPS_LOGIN_USER / GPS_LOGIN_PASS). Read-only: positions only,
+  // no cut/restore. Disabled automatically if the login is unset.
+  gps18: {
+    base: (process.env.GPS_API_BASE || 'https://api.18gps.net').replace(/\/+$/, ''),
+    account: process.env.GPS_LOGIN_USER || process.env.GPS_ACCOUNT || '',
+    password: process.env.GPS_LOGIN_PASS || process.env.GPS_PASSWORD || '',
+    loginType: process.env.GPS_LOGIN_TYPE || 'ENTERPRISE',
+    timeZone: process.env.GPS_TIMEZONE || '+03',
+    mapType: process.env.GPS_MAP_TYPE || 'google',
+  },
+
   httpTimeoutMs: num(process.env.HTTP_TIMEOUT_MS, 15000),
   // How stale a signal may be before an officer is shown "offline" (minutes).
   offlineAfterMin: num(process.env.OFFLINE_AFTER_MIN, 25),
@@ -62,9 +75,16 @@ export const config = {
 };
 
 export function assertConfigured() {
-  if (!config.wanway.appid || !config.wanway.secret) {
+  const wanway = config.wanway.appid && config.wanway.secret;
+  const g18 = config.gps18.account && config.gps18.password;
+  if (!wanway && !g18) {
     throw new Error(
-      'Missing Wanway credentials. Set WANWAY_APPID and WANWAY_API_KEY (same values as smart-collector).',
+      'No GPS platform configured. Set WANWAY_APPID + WANWAY_API_KEY and/or GPS_LOGIN_USER + GPS_LOGIN_PASS (same values as smart-collector).',
     );
   }
 }
+
+export const platformsEnabled = {
+  get wanway() { return Boolean(config.wanway.appid && config.wanway.secret); },
+  get gps18() { return Boolean(config.gps18.account && config.gps18.password); },
+};

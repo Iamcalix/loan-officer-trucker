@@ -277,9 +277,12 @@ function renderList() {
     const st = o.status || { state: 'moving', text: '' };
     const d = document.createElement('div');
     d.className = 'item' + (o.imei === selected ? ' sel' : '');
+    const met = o.metToday
+      ? `<div class="sub" style="color:#4ade80">✓ ${o.metToday} customer${o.metToday === 1 ? '' : 's'} met today${o.withCustomersMinToday ? ' · ' + o.withCustomersMinToday + 'm' : ''}</div>`
+      : '';
     d.innerHTML = `<div class="nm"><span class="dot" style="background:${stateColor(st.state)}"></span>${o.name}</div>
       <div class="sub">${o.area ? o.area + ' · ' : ''}${o.imei}</div>
-      <span class="badge b-${st.state}">${st.text}</span>`;
+      <span class="badge b-${st.state}">${st.text}</span>${met}`;
     d.onclick = () => selectOfficer(o.imei);
     el.appendChild(d);
   }

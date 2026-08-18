@@ -62,7 +62,7 @@ const normPlate = (s) => String(s || '').toUpperCase().replace(/[^A-Z0-9]/g, '')
 function assignedSummary(officer, items) {
   const visitedByPlate = new Map();
   for (const v of officer.visits) {
-    const p = normPlate(v.name);
+    const p = normPlate(v.plate || v.name);
     if (!p) continue;
     const cur = visitedByPlate.get(p) || { minutes: 0, stops: [] };
     cur.minutes += v.minutes; cur.stops.push(...v.stops);
@@ -86,7 +86,7 @@ function assignedSummary(officer, items) {
 // Build the full report object for a date. Caller should refresh the customer
 // geofence first so customer matching is populated, and may pass the day's
 // follow-list assignments (Map officerImei -> items[]) to include follow-up stats.
-export async function buildReport(gps, date = eatToday(), assignmentsByOfficer = new Map()) {
+export async function buildReport(gps, date = eatToday(), assignmentsByOfficer = new Map(), visitsByOfficer = new Map()) {
   const { start, end } = dayBounds(date);
   const roster = [...officerImeis()];
   const officers = [];
@@ -97,6 +97,16 @@ export async function buildReport(gps, date = eatToday(), assignmentsByOfficer =
     done.forEach((o) => { if (o) officers.push(o); });
   }
   for (const o of officers) {
+    // GPS-history visits are complete for Wanway officers; for officers with no
+    // history (18gps), fall back to the live-sampled visit log so "customers met"
+    // and durations still work. Match by plate in either case.
+    if (o.points === 0 && visitsByOfficer.has(o.imei)) {
+      const lv = visitsByOfficer.get(o.imei);
+      o.visits = lv;
+      o.customersMet = lv.length;
+      o.withCustomersMin = lv.reduce((s, v) => s + v.minutes, 0);
+      o.visitSource = 'live';
+    }
     const items = assignmentsByOfficer.get(o.imei) || [];
     o.assigned = items.length ? assignedSummary(o, items) : null;
   }

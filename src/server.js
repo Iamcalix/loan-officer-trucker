@@ -11,6 +11,7 @@ import { createFleetClient } from './fleet.js';
 import { officerFor, officerImeis, hasRoster, saveRoster, initRoster } from './officers.js';
 import { loadRegister, matchCandidates, registerSize } from './register.js';
 import { saveAssignments, setAssignmentPlate, getAssignments, assignedPlatesForDay } from './assignments.js';
+import { sampleFromRows, getVisits } from './visitlog.js';
 import { classify, officePlace, customerCount, setLiveCustomers } from './places.js';
 import { analyzeTrack } from './visits.js';
 import { buildReport, writeReportFiles, listReports, eatToday } from './report.js';
@@ -111,7 +112,7 @@ async function buildSnapshot() {
     }
   }
 
-  return rows.map((l) => {
+  const snapshot = rows.map((l) => {
     const o = officerFor(l.imei);
     const place = classify(l);
     const st = statusByImei.get(l.imei) || null;
@@ -129,6 +130,28 @@ async function buildSnapshot() {
       ageSec: st ? st.ageSec : null,
     };
   });
+
+  // Log live proximity so "customers met" works for BOTH platforms (no history
+  // API needed), then attach each officer's running count of customers met today.
+  const now = Math.floor(Date.now() / 1000);
+  await sampleFromRows(snapshot, now).catch(() => {});
+  const met = await metTodayMap().catch(() => new Map());
+  for (const s of snapshot) {
+    const v = met.get(s.imei) || [];
+    s.metToday = v.length;
+    s.withCustomersMinToday = v.reduce((sum, x) => sum + x.minutes, 0);
+  }
+  return snapshot;
+}
+
+// Cache of today's logged visits (officerImei -> [visit,...]) for the live badge.
+let todVisits = { at: 0, day: null, map: new Map() };
+async function metTodayMap() {
+  const day = eatToday();
+  if (todVisits.day === day && Date.now() - todVisits.at < 30_000) return todVisits.map;
+  const map = await getVisits(day);
+  todVisits = { at: Date.now(), day, map };
+  return map;
 }
 
 async function getSnapshot() {
@@ -154,7 +177,8 @@ async function makeReport(date) {
     if (!byOfficer.has(r.officerImei)) byOfficer.set(r.officerImei, []);
     byOfficer.get(r.officerImei).push(r);
   }
-  return buildReport(gps, date, byOfficer);
+  const visitsByOfficer = await getVisits(date).catch(() => new Map());
+  return buildReport(gps, date, byOfficer, visitsByOfficer);
 }
 
 // -------------------------------- routing ------------------------------------

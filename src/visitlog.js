@@ -32,6 +32,7 @@ async function persist(officerImei, s) {
     day: s.day, officer_imei: String(officerImei), customer_plate: s.plate,
     customer_name: s.name || '', start_ts: s.startTs, end_ts: s.lastTs,
     seconds: Math.max(0, s.lastTs - s.startTs),
+    lat: s.lat ?? null, lng: s.lng ?? null,
   };
   try {
     await sb('visits?on_conflict=day,officer_imei,customer_plate,start_ts', {
@@ -47,15 +48,17 @@ async function persist(officerImei, s) {
 // (a {type:'customer', id, name} or office/null). nowSec = sample time. speedKmh
 // is the officer's live speed — only a STATIONARY officer counts as "with" the
 // customer, so riding past a parked customer bike is ignored.
-export async function record(officerImei, place, nowSec, speedKmh) {
+export async function record(officerImei, place, nowSec, speedKmh, lat, lng) {
   const stationary = speedKmh == null ? true : speedKmh <= config.proximity.stopSpeedKmh;
   const isCust = Boolean(place && place.type === 'customer' && stationary);
   const plate = isCust ? normPlate(place.name) : null;
   const cur = open.get(officerImei);
+  const hasPos = Number.isFinite(lat) && Number.isFinite(lng);
 
   if (isCust && cur && cur.plate === plate) {
-    // still with the same customer — extend the session
+    // still with the same customer — extend the session (keep the meeting location)
     cur.lastTs = nowSec;
+    if (hasPos) { cur.lat = lat; cur.lng = lng; }
     if (nowSec - (cur.lastPersist || 0) >= 60) await persist(officerImei, cur);
     return;
   }
@@ -63,7 +66,11 @@ export async function record(officerImei, place, nowSec, speedKmh) {
   if (cur) { await persist(officerImei, cur); open.delete(officerImei); }
   if (isCust) {
     const c = customerByPlate(plate);
-    const s = { day: eatDay(nowSec), plate, name: c?.name || place.name, startTs: nowSec, lastTs: nowSec, lastPersist: 0 };
+    const s = {
+      day: eatDay(nowSec), plate, name: c?.name || place.name,
+      startTs: nowSec, lastTs: nowSec, lastPersist: 0,
+      lat: hasPos ? lat : null, lng: hasPos ? lng : null,
+    };
     open.set(officerImei, s);
     await persist(officerImei, s);
   }
@@ -75,23 +82,25 @@ export async function sampleFromRows(rows, nowSec) {
   for (const r of rows) {
     // r.place is the map snapshot's place ({type,name,distM}) or null; r.speedKmh
     // gates out drive-bys.
-    await record(r.imei, r.place, nowSec, r.speedKmh).catch(() => {});
+    await record(r.imei, r.place, nowSec, r.speedKmh, r.lat, r.lng).catch(() => {});
   }
 }
 
 // ---- read side (report + live "met today" badge) ----
 export async function getVisits(day) {
   if (!supabaseEnabled()) return new Map();
-  const rows = await sbSelect(`visits?day=eq.${day}&select=officer_imei,customer_plate,customer_name,start_ts,end_ts,seconds&order=start_ts`);
+  const rows = await sbSelect(`visits?day=eq.${day}&select=officer_imei,customer_plate,customer_name,start_ts,end_ts,seconds,lat,lng&order=start_ts`);
   const byOfficer = new Map();
   for (const r of rows) {
     const imei = String(r.officer_imei);
     if (!byOfficer.has(imei)) byOfficer.set(imei, new Map());
     const perCust = byOfficer.get(imei);
     const key = r.customer_plate;
-    const v = perCust.get(key) || { plate: r.customer_plate, name: r.customer_name || r.customer_plate, phone: '', minutes: 0, stops: [] };
+    const v = perCust.get(key) || { plate: r.customer_plate, name: r.customer_name || r.customer_plate, phone: '', minutes: 0, stops: [], lat: null, lng: null };
     v.minutes += Math.round((r.seconds || 0) / 60);
     v.stops.push({ start: r.start_ts, end: r.end_ts, minutes: Math.round((r.seconds || 0) / 60) });
+    // Keep a meeting location for the map (prefer the longest/most recent session).
+    if (Number.isFinite(r.lat) && Number.isFinite(r.lng)) { v.lat = r.lat; v.lng = r.lng; }
     perCust.set(key, v);
   }
   // → Map(officerImei -> [visit,...]), keeping only customers the officer actually

@@ -384,6 +384,9 @@ const server = http.createServer(async (req, res) => {
       // come from history (best-effort, Wanway only).
       const liveByImei = new Map(locs.map((l) => [l.imei, l]));
       const visits = (dayVisits.get(imei) || []).map((v) => {
+        // Prefer the location logged at the moment of the visit; only older rows
+        // (before we stored it) fall back to the customer's current position.
+        if (Number.isFinite(v.lat) && Number.isFinite(v.lng)) return v;
         let pos = null;
         for (const im of (plateIdx.get(v.plate) || [])) { const l = liveByImei.get(im); if (l) { pos = l; break; } }
         return { ...v, lat: pos ? pos.lat : null, lng: pos ? pos.lng : null };

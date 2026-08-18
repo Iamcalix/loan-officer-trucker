@@ -27,7 +27,11 @@ async function getDeviceNames() {
   // Names change rarely; refresh at most every 5 min.
   if (deviceNames.map.size && Date.now() - deviceNames.at < 5 * 60_000) return deviceNames.map;
   const list = await gps.listDevices();
-  deviceNames = { at: Date.now(), map: new Map(list.map((d) => [d.imei, d.name])) };
+  // MERGE into the existing roster (never replace). A refresh can transiently
+  // return fewer devices if a platform/sub-account call fails; overwriting would
+  // make bikes vanish from the picker. Union keeps every bike once seen.
+  for (const d of list) deviceNames.map.set(d.imei, d.name);
+  deviceNames.at = Date.now();
   return deviceNames.map;
 }
 
@@ -191,13 +195,19 @@ const server = http.createServer(async (req, res) => {
     }
 
     // All bikes, each flagged whether it is currently a field officer — feeds the
-    // "Manage officers" picker.
+    // "Manage officers" picker. Based on the FULL device roster (both platforms),
+    // NOT just live-positioned bikes, so a momentarily-offline tracker can still be
+    // picked as an officer and every bike is selectable.
     if (p === '/api/devices') {
       const roster = officerImeis();
-      const [locs, names] = await Promise.all([getLiveLocations(), getDeviceNames().catch(() => new Map())]);
-      const list = locs.map((l) => {
-        const o = officerFor(l.imei);
-        return { imei: l.imei, name: names.get(l.imei) || l.imei, isOfficer: roster.has(l.imei), officer: o || null };
+      const [names, locs] = await Promise.all([
+        getDeviceNames().catch(() => new Map()),
+        getLiveLocations().catch(() => []),
+      ]);
+      const hasFix = new Set(locs.map((l) => l.imei));
+      const list = [...names.entries()].map(([imei, name]) => {
+        const o = officerFor(imei);
+        return { imei, name: name || imei, isOfficer: roster.has(imei), officer: o || null, online: hasFix.has(imei) };
       }).sort((a, b) => (b.isOfficer - a.isOfficer) || String(a.name).localeCompare(String(b.name)));
       return sendJson(res, 200, { count: list.length, devices: list });
     }

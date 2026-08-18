@@ -111,13 +111,26 @@ export function create18gpsClient() {
           if (imei && !map.has(imei)) map.set(imei, o);
         }
       };
+      // Fetch each unit; a unit that fails (timeout/transient error) or yields no
+      // block is retried, so a flaky call doesn't silently drop a whole sub-account's
+      // bikes ("not all bikes appear"). Up to 3 passes over the still-failing units.
       const CONC = 8;
-      for (let i = 0; i < ids.length; i += CONC) {
-        const results = await Promise.all(
-          ids.slice(i, i + CONC).map((id) =>
-            call({ method: 'getDeviceListByCustomId', id, mapType }).catch(() => null)),
-        );
-        results.forEach((r) => { if (r) ingest(r); });
+      const fetchUnit = async (id) => {
+        const res = await call({ method: 'getDeviceListByCustomId', id, mapType });
+        if (!res?.json?.data?.[0]?.key) throw new Error('no device block');
+        return res;
+      };
+      let pending = ids.slice();
+      for (let pass = 0; pass < 3 && pending.length; pass++) {
+        const failed = [];
+        for (let i = 0; i < pending.length; i += CONC) {
+          const slice = pending.slice(i, i + CONC);
+          const results = await Promise.all(
+            slice.map((id) => fetchUnit(id).then((r) => [id, r]).catch(() => [id, null])),
+          );
+          results.forEach(([id, r]) => { if (r) ingest(r); else failed.push(id); });
+        }
+        pending = failed;
       }
       batch = map; batchAt = Date.now();
       return map;

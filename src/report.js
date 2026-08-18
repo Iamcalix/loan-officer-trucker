@@ -97,16 +97,16 @@ export async function buildReport(gps, date = eatToday(), assignmentsByOfficer =
     done.forEach((o) => { if (o) officers.push(o); });
   }
   for (const o of officers) {
-    // GPS-history visits are complete for Wanway officers; for officers with no
-    // history (18gps), fall back to the live-sampled visit log so "customers met"
-    // and durations still work. Match by plate in either case.
-    if (o.points === 0 && visitsByOfficer.has(o.imei)) {
-      const lv = visitsByOfficer.get(o.imei);
-      o.visits = lv;
-      o.customersMet = lv.length;
-      o.withCustomersMin = lv.reduce((s, v) => s + v.minutes, 0);
-      o.visitSource = 'live';
-    }
+    // "Customers met" comes from the LIVE visit log, not GPS history: 18gps gives
+    // no history at all, and Wanway history returns only a short window (it under-
+    // counted 7 real stops as 1). The live log samples stationary proximity for
+    // both platforms, so it's the reliable source. History is still used for the
+    // route timeline / office time / distance below (best-effort, Wanway only).
+    const lv = visitsByOfficer.get(o.imei) || [];
+    o.visits = lv;
+    o.customersMet = lv.length;
+    o.withCustomersMin = lv.reduce((s, v) => s + v.minutes, 0);
+    o.visitSource = 'live';
     const items = assignmentsByOfficer.get(o.imei) || [];
     o.assigned = items.length ? assignedSummary(o, items) : null;
   }

@@ -294,11 +294,24 @@ async function selectOfficer(imei) {
   clearMarkers();
   if (custLayer) map.removeLayer(custLayer); // clean map for the route
   const hours = $('hours').value;
-  try {
-    const r = await fetch(`/api/officers/${encodeURIComponent(imei)}/history?hours=${hours}`);
-    const j = await r.json();
-    drawRoute(j);
-  } catch (e) { alert('Failed to load history'); goLive(); }
+  const name = (officers.find((o) => o.imei === imei) || {}).name || imei;
+  const url = `/api/officers/${encodeURIComponent(imei)}/history?hours=${hours}`;
+  // The free dyno may be cold — retry once after a short wait before giving up,
+  // and never show a scary alert (a cold start is normal, not an error).
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    $('meta').textContent = attempt === 1 ? `Loading ${name}…` : `Waking server, loading ${name}…`;
+    try {
+      const r = await fetch(url);
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      const j = await r.json();
+      if (selected !== imei) return; // user picked someone else meanwhile
+      drawRoute(j);
+      return;
+    } catch (e) {
+      if (attempt === 1) { await new Promise((r) => setTimeout(r, 3000)); continue; }
+      if (selected === imei) $('meta').textContent = `Couldn't load ${name} — click the officer again to retry.`;
+    }
+  }
 }
 
 function drawRoute(j) {

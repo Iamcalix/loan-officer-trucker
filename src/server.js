@@ -367,9 +367,9 @@ const server = http.createServer(async (req, res) => {
       const hours = Number(url.searchParams.get('hours'));
       const start = Number(url.searchParams.get('start')) || now - (Number.isFinite(hours) && hours > 0 ? hours : 8) * 3600;
       const end = Number(url.searchParams.get('end')) || now;
-      await refreshCustomerGeofence();
+      await refreshCustomerGeofence().catch(() => {});
       const [points, status, loc, dayVisits, plateIdx, locs] = await Promise.all([
-        gps.history(imei, start, end),
+        gps.history(imei, start, end).catch(() => []), // a history failure must not 502 the whole view
         gps.status(imei).catch(() => null),
         gps.location(imei).catch(() => null),
         getVisits(eatToday()).catch(() => new Map()),
@@ -463,6 +463,11 @@ setInterval(() => { loadRegister().catch(() => {}); }, 10 * 60_000).unref();
 
 server.listen(config.port, () => {
   console.log(`officer-tracker listening on http://localhost:${config.port}`);
+  // Warm the fleet caches right away so the first user click after a cold start
+  // (Render free dynos sleep when idle) isn't a slow read that can time out.
+  Promise.allSettled([getDeviceNames(), getLiveLocations()])
+    .then(() => console.log('fleet caches warmed'))
+    .catch(() => {});
 });
 
 // Nightly end-of-day report → saved file in the reports dir.

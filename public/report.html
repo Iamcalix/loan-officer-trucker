@@ -92,7 +92,24 @@ function render(j) {
         <div class="stat"><div class="n">${dur(o.officeMinutes)}</div><div class="l">at office</div></div>
         <div class="stat"><div class="n">${o.distanceKm} km</div><div class="l">distance</div></div>
         <div class="stat"><div class="n">${o.unexplained.length}</div><div class="l">unexplained stops</div></div>
+        ${o.assigned ? `<div class="stat"><div class="n">${o.assigned.visited}/${o.assigned.total}</div><div class="l">assigned visited</div></div>` : ''}
       </div>`;
+
+    if (o.assigned) {
+      const visited = o.assigned.items.filter((i) => i.visited).sort((a, b) => b.minutes - a.minutes);
+      const notVisited = o.assigned.items.filter((i) => !i.visited);
+      html += `<h3>Assigned follow-list — ${o.assigned.visited}/${o.assigned.total} visited</h3><table>
+        <tr><th>Customer</th><th>Status</th><th>Time with them</th><th>When</th></tr>`;
+      for (const i of visited) {
+        html += `<tr><td>${i.name}</td><td><span class="tag t-customer">Visited</span></td>
+          <td><b>${dur(i.minutes)}</b></td><td class="muted">${i.stops.map((s) => hm(s.start) + '–' + hm(s.end)).join(', ')}</td></tr>`;
+      }
+      for (const i of notVisited) {
+        html += `<tr><td>${i.name}${i.matched ? '' : ' <span class="muted">(unmatched)</span>'}</td>
+          <td><span class="tag t-unknown">Not visited</span></td><td class="muted">—</td><td></td></tr>`;
+      }
+      html += `</table>`;
+    }
 
     if (o.visits.length) {
       html += `<h3>Customers interacted with</h3><table>

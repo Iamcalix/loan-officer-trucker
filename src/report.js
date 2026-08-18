@@ -55,9 +55,38 @@ async function officerDay(gps, imei, start, end) {
   };
 }
 
+const normPlate = (s) => String(s || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+
+// Cross-reference an officer's actual visits against their assigned follow-list:
+// who was visited (and for how long) vs. who was NOT visited.
+function assignedSummary(officer, items) {
+  const visitedByPlate = new Map();
+  for (const v of officer.visits) {
+    const p = normPlate(v.name);
+    if (!p) continue;
+    const cur = visitedByPlate.get(p) || { minutes: 0, stops: [] };
+    cur.minutes += v.minutes; cur.stops.push(...v.stops);
+    visitedByPlate.set(p, cur);
+  }
+  const list = items.map((it) => {
+    const hit = it.matched && it.plate ? visitedByPlate.get(normPlate(it.plate)) : null;
+    return {
+      name: it.name, plate: it.plate || null, matched: Boolean(it.matched),
+      visited: Boolean(hit), minutes: hit ? hit.minutes : 0, stops: hit ? hit.stops : [],
+    };
+  });
+  return {
+    total: items.length,
+    matched: items.filter((i) => i.matched).length,
+    visited: list.filter((l) => l.visited).length,
+    items: list,
+  };
+}
+
 // Build the full report object for a date. Caller should refresh the customer
-// geofence first so customer matching is populated.
-export async function buildReport(gps, date = eatToday()) {
+// geofence first so customer matching is populated, and may pass the day's
+// follow-list assignments (Map officerImei -> items[]) to include follow-up stats.
+export async function buildReport(gps, date = eatToday(), assignmentsByOfficer = new Map()) {
   const { start, end } = dayBounds(date);
   const roster = [...officerImeis()];
   const officers = [];
@@ -66,6 +95,10 @@ export async function buildReport(gps, date = eatToday()) {
     const batch = roster.slice(i, i + CONC);
     const done = await Promise.all(batch.map((imei) => officerDay(gps, imei, start, end).catch(() => null)));
     done.forEach((o) => { if (o) officers.push(o); });
+  }
+  for (const o of officers) {
+    const items = assignmentsByOfficer.get(o.imei) || [];
+    o.assigned = items.length ? assignedSummary(o, items) : null;
   }
   officers.sort((a, b) => String(a.name).localeCompare(String(b.name)));
   return { date, start, end, count: officers.length, officers };
@@ -94,7 +127,24 @@ function officerBlock(o) {
       <div class="stat"><div class="n">${dur(o.officeMinutes)}</div><div class="l">at office</div></div>
       <div class="stat"><div class="n">${o.distanceKm} km</div><div class="l">distance</div></div>
       <div class="stat"><div class="n">${o.unexplained.length}</div><div class="l">unexplained stops</div></div>
+      ${o.assigned ? `<div class="stat"><div class="n">${o.assigned.visited}/${o.assigned.total}</div><div class="l">assigned visited</div></div>` : ''}
     </div>`;
+  if (o.assigned) {
+    const a = o.assigned;
+    const visited = a.items.filter((i) => i.visited).sort((x, y) => y.minutes - x.minutes);
+    const notVisited = a.items.filter((i) => !i.visited);
+    h += `<h3>Assigned follow-list — ${a.visited}/${a.total} visited</h3><table>
+      <tr><th>Customer</th><th>Status</th><th>Time with them</th><th>When</th></tr>`;
+    for (const i of visited) {
+      h += `<tr><td>${esc(i.name)}</td><td><span class="tag t-customer">Visited</span></td>
+        <td><b>${dur(i.minutes)}</b></td><td class="muted">${i.stops.map((s) => hm(s.start) + '–' + hm(s.end)).join(', ')}</td></tr>`;
+    }
+    for (const i of notVisited) {
+      h += `<tr><td>${esc(i.name)}${i.matched ? '' : ' <span class="muted">(unmatched)</span>'}</td>
+        <td><span class="tag t-unknown">Not visited</span></td><td class="muted">—</td><td></td></tr>`;
+    }
+    h += `</table>`;
+  }
   if (o.visits.length) {
     h += `<h3>Customers interacted with</h3><table><tr><th>Customer</th><th>Total time</th><th>Visits</th><th>Times</th></tr>`;
     for (const v of o.visits) {

@@ -9,6 +9,8 @@ import { fileURLToPath } from 'node:url';
 import { config, assertConfigured } from './config.js';
 import { createFleetClient } from './fleet.js';
 import { officerFor, officerImeis, hasRoster, saveRoster, initRoster } from './officers.js';
+import { loadRegister, matchCandidates, registerSize } from './register.js';
+import { saveAssignments, setAssignmentPlate, getAssignments, assignedPlatesForDay } from './assignments.js';
 import { classify, officePlace, customerCount, setLiveCustomers } from './places.js';
 import { analyzeTrack } from './visits.js';
 import { buildReport, writeReportFiles, listReports, eatToday } from './report.js';
@@ -33,6 +35,25 @@ async function getDeviceNames() {
   for (const d of list) deviceNames.map.set(d.imei, d.name);
   deviceNames.at = Date.now();
   return deviceNames.map;
+}
+
+// Reverse index: normalized plate -> [imei, ...] (a plate can have >1 tracker),
+// rebuilt whenever the device-name cache changes. Lets a register plate resolve to
+// its live tracker(s).
+const normPlate = (s) => String(s || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+let plateIndex = { at: 0, map: new Map() };
+async function getPlateIndex() {
+  const names = await getDeviceNames();
+  if (plateIndex.at === deviceNames.at && plateIndex.map.size) return plateIndex.map;
+  const map = new Map();
+  for (const [imei, name] of names) {
+    const p = normPlate(name);
+    if (!p) continue;
+    if (!map.has(p)) map.set(p, []);
+    map.get(p).push(imei);
+  }
+  plateIndex = { at: deviceNames.at, map };
+  return map;
 }
 
 // Cache the bulk position read so the live map and the customer geofence share
@@ -125,7 +146,15 @@ async function getSnapshot() {
 // and the nightly scheduler.
 async function makeReport(date) {
   await refreshCustomerGeofence();
-  return buildReport(gps, date);
+  // Group the day's follow-list assignments by officer so the report can show
+  // visited vs not-visited per officer.
+  const rows = await getAssignments(date).catch(() => []);
+  const byOfficer = new Map();
+  for (const r of rows) {
+    if (!byOfficer.has(r.officerImei)) byOfficer.set(r.officerImei, []);
+    byOfficer.get(r.officerImei).push(r);
+  }
+  return buildReport(gps, date, byOfficer);
 }
 
 // -------------------------------- routing ------------------------------------
@@ -233,13 +262,77 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (p === '/api/customers') {
-      // Every bike that is NOT a loan officer, at its current position.
+      // Every bike that is NOT a loan officer, at its current position. Today's
+      // assigned "must-follow" customers are flagged so the map can highlight them.
       const roster = officerImeis();
-      const [locs, names] = await Promise.all([getLiveLocations(), getDeviceNames().catch(() => new Map())]);
+      const day = url.searchParams.get('day') || eatToday();
+      const [locs, names, assigned] = await Promise.all([
+        getLiveLocations(),
+        getDeviceNames().catch(() => new Map()),
+        assignedPlatesForDay(day).catch(() => new Map()),
+      ]);
       const list = locs
         .filter((l) => !roster.has(l.imei))
-        .map((l) => ({ imei: l.imei, name: names.get(l.imei) || l.imei, lat: l.lat, lng: l.lng }));
-      return sendJson(res, 200, { count: list.length, customers: list });
+        .map((l) => {
+          const name = names.get(l.imei) || l.imei;
+          const officersForPlate = assigned.get(normPlate(name));
+          return {
+            imei: l.imei, name, lat: l.lat, lng: l.lng,
+            assigned: Boolean(officersForPlate),
+            assignedTo: officersForPlate ? officersForPlate.map((imei) => officerFor(imei)?.name || imei) : null,
+          };
+        });
+      return sendJson(res, 200, { count: list.length, assignedCount: list.filter((c) => c.assigned).length, customers: list });
+    }
+
+    // Register search — fuzzy name matches for the manual-map UI / autocomplete.
+    if (p === '/api/register/search') {
+      const q = url.searchParams.get('q') || '';
+      const limit = Math.min(Number(url.searchParams.get('limit')) || 8, 25);
+      return sendJson(res, 200, { size: registerSize(), matches: q ? matchCandidates(q, limit) : [] });
+    }
+
+    // Import an officer's daily follow-list: { officerImei, names:[...], day? }.
+    if (p === '/api/assignments' && req.method === 'POST') {
+      const body = await readBody(req);
+      let payload; try { payload = JSON.parse(body || '{}'); } catch { return sendJson(res, 400, { error: 'invalid JSON' }); }
+      const officerImei = String(payload.officerImei || '');
+      if (!/^\d{6,}$/.test(officerImei)) return sendJson(res, 400, { error: 'valid officerImei required' });
+      const day = payload.day || eatToday();
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) return sendJson(res, 400, { error: 'bad day' });
+      const names = Array.isArray(payload.names) ? payload.names
+        : String(payload.names || '').split(/[\n,;]+/); // accept a pasted block too
+      const result = await saveAssignments(day, officerImei, names);
+      snapCache = { at: 0, data: null, promise: null };
+      return sendJson(res, 200, { ok: true, ...result });
+    }
+
+    // Manually map one unmatched name to a plate: { day?, officerImei, enteredName, plate }.
+    if (p === '/api/assignments/map' && req.method === 'POST') {
+      const body = await readBody(req);
+      let payload; try { payload = JSON.parse(body || '{}'); } catch { return sendJson(res, 400, { error: 'invalid JSON' }); }
+      const day = payload.day || eatToday();
+      const officerImei = String(payload.officerImei || '');
+      if (!/^\d{6,}$/.test(officerImei) || !payload.enteredName) return sendJson(res, 400, { error: 'officerImei + enteredName required' });
+      await setAssignmentPlate(day, officerImei, String(payload.enteredName), payload.plate || null);
+      snapCache = { at: 0, data: null, promise: null };
+      return sendJson(res, 200, { ok: true });
+    }
+
+    // Today's (or ?day=) follow-list grouped per officer, with match status.
+    if (p === '/api/assignments') {
+      const day = url.searchParams.get('day') || eatToday();
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) return sendJson(res, 400, { error: 'bad day' });
+      const rows = await getAssignments(day);
+      const byOfficer = new Map();
+      for (const r of rows) {
+        if (!byOfficer.has(r.officerImei)) {
+          const o = officerFor(r.officerImei);
+          byOfficer.set(r.officerImei, { officerImei: r.officerImei, officer: o?.name || r.officerImei, items: [] });
+        }
+        byOfficer.get(r.officerImei).items.push(r);
+      }
+      return sendJson(res, 200, { day, officers: [...byOfficer.values()] });
     }
 
     // /api/officers/:imei/history?hours=8  (or ?start=&end= unix seconds)
@@ -319,10 +412,12 @@ const server = http.createServer(async (req, res) => {
 });
 
 assertConfigured();
-// Seed the officer roster from durable storage (Supabase) before serving, then
-// refresh it periodically so a roster edited elsewhere is picked up.
+// Seed the officer roster + customer register from durable storage (Supabase)
+// before serving, then refresh periodically so edits elsewhere are picked up.
 await initRoster();
+await loadRegister().then((r) => console.log(`customer register loaded: ${r.length} customers`)).catch((e) => console.error('register load failed:', e.message));
 setInterval(() => { initRoster().catch(() => {}); }, 60_000).unref();
+setInterval(() => { loadRegister().catch(() => {}); }, 10 * 60_000).unref();
 
 server.listen(config.port, () => {
   console.log(`officer-tracker listening on http://localhost:${config.port}`);

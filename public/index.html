@@ -40,6 +40,26 @@
   #summary .warn { color:#fca5a5; }
   #summary .ok { color:#bbf7d0; }
   #manage { margin-top:8px; width:100%; padding:7px; background:var(--accent); color:#04222f; border:0; border-radius:6px; font-weight:700; cursor:pointer; }
+  #followBtn { margin-top:6px; width:100%; padding:7px; background:#f59e0b; color:#3b2600; border:0; border-radius:6px; font-weight:700; cursor:pointer; }
+  /* Daily follow-list modal */
+  #fmodal { position:fixed; inset:0; background:rgba(2,6,23,.7); z-index:2000; display:none; align-items:center; justify-content:center; }
+  #fmodal.show { display:flex; }
+  #fpanel { width:560px; max-width:94vw; max-height:88vh; background:var(--panel); border:1px solid var(--line); border-radius:12px; display:flex; flex-direction:column; }
+  #fpanel .top { padding:12px 14px; border-bottom:1px solid var(--line); }
+  #fpanel .top h2 { font-size:15px; margin:0; }
+  #fpanel .body { padding:12px 14px; overflow:auto; }
+  #fpanel label { font-size:12px; color:var(--mut); display:block; margin-bottom:4px; }
+  #fpanel select, #fpanel textarea { width:100%; background:var(--bg); color:var(--txt); border:1px solid var(--line); border-radius:6px; padding:8px; font-size:13px; }
+  #fpanel textarea { height:150px; resize:vertical; margin-top:10px; font-family:inherit; }
+  #fpanel .foot { padding:12px 14px; border-top:1px solid var(--line); display:flex; gap:10px; justify-content:flex-end; }
+  #fpanel .foot .cnt { margin-right:auto; color:var(--mut); font-size:12px; align-self:center; }
+  #fpanel button.save { background:#22c55e; color:#052e16; border:0; padding:8px 16px; border-radius:6px; font-weight:700; cursor:pointer; }
+  #fpanel button.cancel { background:transparent; color:var(--mut); border:1px solid var(--line); padding:8px 14px; border-radius:6px; cursor:pointer; }
+  #fresult { margin-top:12px; font-size:12px; }
+  #fresult .ok { color:#4ade80; } #fresult .no { color:#f87171; }
+  .umap { display:flex; gap:6px; align-items:center; margin:5px 0; flex-wrap:wrap; }
+  .umap input { flex:1; min-width:160px; background:var(--bg); color:var(--txt); border:1px solid var(--line); border-radius:5px; padding:4px 6px; font-size:12px; }
+  .cand { display:inline-block; background:#12324a; border:1px solid var(--line); border-radius:5px; padding:2px 7px; margin:2px 3px 0 0; cursor:pointer; font-size:11px; }
   /* Officer picker modal */
   #modal { position:fixed; inset:0; background:rgba(2,6,23,.7); z-index:2000; display:none; align-items:center; justify-content:center; }
   #modal.show { display:flex; }
@@ -79,6 +99,7 @@
       <div id="meta">loading…</div>
       <input id="search" placeholder="Search officer…" />
       <button id="manage">⚙ Manage officers</button>
+      <button id="followBtn">📋 Daily follow-list</button>
       <a href="/report.html" style="display:block;text-align:center;margin-top:6px;padding:7px;background:var(--bg);border:1px solid var(--line);border-radius:6px;color:var(--accent);text-decoration:none;font-size:13px">📄 Day report</a>
     </div>
     <div id="list"></div>
@@ -117,6 +138,23 @@
       <span class="cnt" id="pcnt"></span>
       <button class="cancel" id="pcancel">Cancel</button>
       <button class="save" id="psave">Save</button>
+    </div>
+  </div>
+</div>
+
+<div id="fmodal">
+  <div id="fpanel">
+    <div class="top"><h2>📋 Daily follow-list — customers each officer must visit today</h2></div>
+    <div class="body">
+      <label>Officer</label>
+      <select id="fofficer"></select>
+      <textarea id="fnames" placeholder="Paste this officer's customer names — one per line"></textarea>
+      <div id="fresult"></div>
+    </div>
+    <div class="foot">
+      <span class="cnt" id="fcnt"></span>
+      <button class="cancel" id="fcancel">Close</button>
+      <button class="save" id="fsave">Save list</button>
     </div>
   </div>
 </div>
@@ -186,9 +224,16 @@ async function loadCustomers() {
     if (custLayer) map.removeLayer(custLayer);
     custLayer = L.layerGroup();
     for (const c of (j.customers || [])) {
-      L.circleMarker([c.lat, c.lng], { radius: 3, color: '#64748b', weight: 1, fillColor: '#94a3b8', fillOpacity: .6 })
-        .bindTooltip(c.name, { className: 'lbl' })
-        .addTo(custLayer);
+      if (c.assigned) {
+        // "Must-follow" customer today — highlighted marker, drawn prominently.
+        L.circleMarker([c.lat, c.lng], { radius: 8, color: '#b45309', weight: 2, fillColor: '#fbbf24', fillOpacity: .95 })
+          .bindTooltip('⭐ ' + c.name + (c.assignedTo ? ' → ' + c.assignedTo.join(', ') : ''), { className: 'lbl' })
+          .addTo(custLayer);
+      } else {
+        L.circleMarker([c.lat, c.lng], { radius: 3, color: '#64748b', weight: 1, fillColor: '#94a3b8', fillOpacity: .6 })
+          .bindTooltip(c.name, { className: 'lbl' })
+          .addTo(custLayer);
+      }
     }
     if (!selected) custLayer.addTo(map);
   } catch { /* customers optional */ }
@@ -424,6 +469,81 @@ $('psave').onclick = async () => {
     await loadLive(); await loadCustomers();
   } catch (e) { alert('Save failed: ' + e.message); }
   finally { $('psave').textContent = 'Save'; $('psave').disabled = false; }
+};
+
+// ---- Daily follow-list modal ----
+async function openFollow() {
+  $('fmodal').classList.add('show');
+  $('fresult').innerHTML = ''; $('fnames').value = ''; $('fcnt').textContent = '';
+  $('fofficer').innerHTML = '<option>Loading…</option>';
+  const j = await (await fetch('/api/devices')).json();
+  const offs = (j.devices || []).filter((d) => d.isOfficer);
+  if (!offs.length) { $('fofficer').innerHTML = '<option value="">— no officers set (use ⚙ Manage officers first) —</option>'; return; }
+  $('fofficer').innerHTML = offs.map((d) => `<option value="${d.imei}">${(d.officer && d.officer.name) || d.name}</option>`).join('');
+  loadOfficerList();
+}
+async function loadOfficerList() {
+  const imei = $('fofficer').value; if (!imei) return;
+  $('fresult').innerHTML = '';
+  try {
+    const j = await (await fetch('/api/assignments')).json();
+    const o = (j.officers || []).find((x) => x.officerImei === imei);
+    $('fnames').value = o ? o.items.map((i) => i.enteredName).join('\n') : '';
+    $('fcnt').textContent = o ? `${o.items.filter((i) => i.matched).length}/${o.items.length} matched for today` : 'no list yet for today';
+  } catch { /* */ }
+}
+function renderFollowResult(officerImei, r) {
+  let h = `<div class="ok">✓ ${r.matched.length} matched</div>`;
+  if (r.unmatched.length) {
+    h += `<div class="no" style="margin-top:6px">${r.unmatched.length} unmatched — search the register to map each:</div>`;
+    for (const name of r.unmatched) {
+      const safe = name.replace(/"/g, '&quot;');
+      h += `<div class="umap" data-name="${safe}"><input value="${safe}" placeholder="search register…"/><span class="cands"></span></div>`;
+    }
+  }
+  $('fresult').innerHTML = h;
+  $('fresult').querySelectorAll('.umap').forEach((row) => {
+    const input = row.querySelector('input'); const cands = row.querySelector('.cands'); let t = null;
+    input.oninput = () => {
+      clearTimeout(t);
+      t = setTimeout(async () => {
+        const q = input.value.trim(); if (q.length < 2) { cands.innerHTML = ''; return; }
+        const j = await (await fetch('/api/register/search?q=' + encodeURIComponent(q) + '&limit=5')).json();
+        cands.innerHTML = (j.matches || []).map((m) => `<span class="cand" data-plate="${m.plate}" data-name="${m.name.replace(/"/g, '&quot;')}">${m.name} [${m.plate}]</span>`).join('');
+        cands.querySelectorAll('.cand').forEach((c) => {
+          c.onclick = async () => {
+            await fetch('/api/assignments/map', {
+              method: 'POST', headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ officerImei, enteredName: row.dataset.name, plate: c.dataset.plate }),
+            });
+            row.innerHTML = `<span class="ok">✓ mapped to ${c.dataset.name} [${c.dataset.plate}]</span>`;
+            loadCustomers();
+          };
+        });
+      }, 250);
+    };
+  });
+}
+$('followBtn').onclick = openFollow;
+$('fofficer').onchange = loadOfficerList;
+$('fcancel').onclick = () => $('fmodal').classList.remove('show');
+$('fmodal').onclick = (e) => { if (e.target.id === 'fmodal') $('fmodal').classList.remove('show'); };
+$('fsave').onclick = async () => {
+  const officerImei = $('fofficer').value;
+  if (!officerImei) { alert('Pick an officer first.'); return; }
+  const names = $('fnames').value.split('\n').map((s) => s.trim()).filter(Boolean);
+  $('fsave').textContent = 'Saving…'; $('fsave').disabled = true;
+  try {
+    const r = await (await fetch('/api/assignments', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ officerImei, names }),
+    })).json();
+    if (!r.ok) throw new Error(r.error || 'save failed');
+    renderFollowResult(officerImei, r);
+    $('fcnt').textContent = `${r.matched.length}/${r.total} matched for today`;
+    loadCustomers();
+  } catch (e) { alert('Save failed: ' + e.message); }
+  finally { $('fsave').textContent = 'Save list'; $('fsave').disabled = false; }
 };
 
 loadPlaces();

@@ -54,14 +54,23 @@ export async function buildReport(gps, date = eatToday(), assignmentsByOfficer =
     const items = assignmentsByOfficer.get(imei) || [];
     const visits = visitsByOfficer.get(imei) || [];
     const ex = extrasByOfficer.get(imei) || {};
+    const assigned = items.length ? assignedSummary(items, visits) : null;
+    // First ASSIGNED customer reached today (consistent with the visited count).
+    let firstCustomerTs = null;
+    if (assigned) {
+      for (const it of assigned.items) {
+        if (!it.visited) continue;
+        for (const s of it.stops) firstCustomerTs = firstCustomerTs == null ? s.start : Math.min(firstCustomerTs, s.start);
+      }
+    }
     return {
       imei,
       name: o?.name || imei,
       area: o?.area || null,
-      assigned: items.length ? assignedSummary(items, visits) : null,
-      // "Started work" = reached the first customer; else first activity of the day.
-      startedTs: ex.firstCustomerTs ?? ex.workStart ?? null,
-      firstCustomerTs: ex.firstCustomerTs ?? null,
+      assigned,
+      // "Started" = reached the first assigned customer, else first activity of the day.
+      startedTs: firstCustomerTs ?? ex.workStart ?? null,
+      firstCustomerTs,
       endedTs: ex.workEnd ?? null,
       unknownStops: ex.unknownStops || [],
     };

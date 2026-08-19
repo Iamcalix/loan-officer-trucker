@@ -51,7 +51,7 @@ async function persist(officerImei, s) {
 export async function record(officerImei, place, nowSec, speedKmh, lat, lng) {
   const stationary = speedKmh == null ? true : speedKmh <= config.proximity.stopSpeedKmh;
   const isCust = Boolean(place && place.type === 'customer' && stationary);
-  const plate = isCust ? normPlate(place.name) : null;
+  const plate = isCust ? normPlate(place.plate || place.name) : null;
   const cur = open.get(officerImei);
   const hasPos = Number.isFinite(lat) && Number.isFinite(lng);
 

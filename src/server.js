@@ -9,10 +9,10 @@ import { fileURLToPath } from 'node:url';
 import { config, assertConfigured } from './config.js';
 import { createFleetClient } from './fleet.js';
 import { officerFor, officerImeis, hasRoster, saveRoster, initRoster } from './officers.js';
-import { loadRegister, matchCandidates, registerSize } from './register.js';
+import { loadRegister, matchCandidates, registerSize, customerByPlate } from './register.js';
 import { saveAssignments, setAssignmentPlate, getAssignments, assignedPlatesForDay } from './assignments.js';
 import { sampleFromRows, getVisits } from './visitlog.js';
-import { classify, officePlace, customerCount, setLiveCustomers } from './places.js';
+import { officePlace, haversineM } from './places.js';
 import { analyzeTrack } from './visits.js';
 import { buildReport, writeReportFiles, listReports, eatToday } from './report.js';
 import { startReportScheduler } from './scheduler.js';
@@ -67,18 +67,44 @@ async function getLiveLocations() {
   return data;
 }
 
-// Customer location source = the customers' OWN bike trackers. Every tracked
-// device that is NOT a field officer is treated as a customer at its current
-// bike position, so "met the customer" = officer's tracker within range of the
-// customer's bike. Requires a roster (otherwise every unit would be a customer).
-async function refreshCustomerGeofence() {
-  const roster = officerImeis();
-  if (roster.size === 0) { setLiveCustomers([]); return; }
-  const [locs, names] = await Promise.all([getLiveLocations(), getDeviceNames().catch(() => new Map())]);
-  setLiveCustomers(
-    locs.filter((l) => !roster.has(l.imei))
-      .map((l) => ({ id: l.imei, name: names.get(l.imei) || l.imei, lat: l.lat, lng: l.lng })),
-  );
+// The app now tracks ONLY each agent's assigned follow-list customers (not every
+// bike). For a day, resolve each officer's assigned customer plates to their bike's
+// current position, so proximity is checked against just those customers.
+async function assignedPositionsByOfficer(day, locs) {
+  const [rows, plateIdx] = await Promise.all([
+    getAssignments(day).catch(() => []),
+    getPlateIndex().catch(() => new Map()),
+  ]);
+  const liveByImei = new Map(locs.map((l) => [l.imei, l]));
+  const map = new Map();
+  for (const r of rows) {
+    if (!r.plate) continue;
+    const np = normPlate(r.plate);
+    let pos = null;
+    for (const im of (plateIdx.get(np) || [])) { const l = liveByImei.get(im); if (l) { pos = l; break; } }
+    if (!map.has(r.officerImei)) map.set(r.officerImei, []);
+    map.get(r.officerImei).push({ plate: np, name: r.name, lat: pos ? pos.lat : null, lng: pos ? pos.lng : null });
+  }
+  return map;
+}
+
+// Where is this officer? The office, or the nearest of THEIR assigned customers
+// within range — nothing else counts anymore.
+function assignedPlace(officerPos, assigned) {
+  const office = officePlace();
+  if (office) {
+    const d = haversineM(officerPos, office);
+    if (d <= office.radiusM) return { type: 'office', name: office.name, distM: Math.round(d) };
+  }
+  let best = null;
+  for (const c of (assigned || [])) {
+    if (!Number.isFinite(c.lat) || !Number.isFinite(c.lng)) continue;
+    const d = haversineM(officerPos, c);
+    if (d <= config.proximity.customerRadiusM && (!best || d < best.distM)) {
+      best = { type: 'customer', name: c.name, plate: c.plate, distM: Math.round(d) };
+    }
+  }
+  return best;
 }
 
 // Live status label from a fix + optional real-time status.
@@ -92,13 +118,13 @@ function liveLabel(place, st) {
 }
 
 async function buildSnapshot() {
-  await refreshCustomerGeofence();
   const [locs, names] = await Promise.all([getLiveLocations(), getDeviceNames().catch(() => new Map())]);
   const roster = officerImeis();
-  // Officers are ONLY the roster bikes. Every other bike is a customer (served
-  // separately via /api/customers), so before the roster is set this list is empty.
   const restrict = roster.size > 0;
   let rows = restrict ? locs.filter((l) => roster.has(l.imei)) : [];
+
+  // Each officer is placed against ONLY their assigned follow-list customers today.
+  const assignedByOff = restrict ? await assignedPositionsByOfficer(eatToday(), locs).catch(() => new Map()) : new Map();
 
   // With a (small) roster we can afford one live status call each, so we can tell
   // moving vs stopped and online vs offline. Without a roster we skip that.
@@ -114,7 +140,7 @@ async function buildSnapshot() {
 
   const snapshot = rows.map((l) => {
     const o = officerFor(l.imei);
-    const place = classify(l);
+    const place = assignedPlace(l, assignedByOff.get(l.imei));
     const st = statusByImei.get(l.imei) || null;
     return {
       imei: l.imei,
@@ -123,11 +149,12 @@ async function buildSnapshot() {
       area: o?.area || null,
       lat: l.lat,
       lng: l.lng,
-      place: place ? { type: place.type, name: place.name, distM: Math.round(place.distM) } : null,
+      place: place ? { type: place.type, name: place.name, plate: place.plate || null, distM: place.distM } : null,
       status: liveLabel(place, st),
       online: st ? st.online : null,
       speedKmh: st ? st.speedKmh : null,
       ageSec: st ? st.ageSec : null,
+      assignedCount: (assignedByOff.get(l.imei) || []).length,
     };
   });
 
@@ -165,10 +192,9 @@ async function getSnapshot() {
   return snapCache.promise;
 }
 
-// Build a report, refreshing the customer geofence first. Shared by the endpoint
-// and the nightly scheduler.
+// Build the per-agent follow-list report. Shared by the endpoint and the nightly
+// scheduler.
 async function makeReport(date) {
-  await refreshCustomerGeofence();
   // Group the day's follow-list assignments by officer so the report can show
   // visited vs not-visited per officer.
   const rows = await getAssignments(date).catch(() => []);
@@ -286,27 +312,27 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (p === '/api/customers') {
-      // Every bike that is NOT a loan officer, at its current position. Today's
-      // assigned "must-follow" customers are flagged so the map can highlight them.
-      const roster = officerImeis();
+      // Only the assigned follow-list customers for the day, at their bikes' current
+      // positions — the app now focuses on those, not the whole fleet.
       const day = url.searchParams.get('day') || eatToday();
-      const [locs, names, assigned] = await Promise.all([
-        getLiveLocations(),
-        getDeviceNames().catch(() => new Map()),
+      const [assigned, plateIdx, locs] = await Promise.all([
         assignedPlatesForDay(day).catch(() => new Map()),
+        getPlateIndex().catch(() => new Map()),
+        getLiveLocations().catch(() => []),
       ]);
-      const list = locs
-        .filter((l) => !roster.has(l.imei))
-        .map((l) => {
-          const name = names.get(l.imei) || l.imei;
-          const officersForPlate = assigned.get(normPlate(name));
-          return {
-            imei: l.imei, name, lat: l.lat, lng: l.lng,
-            assigned: Boolean(officersForPlate),
-            assignedTo: officersForPlate ? officersForPlate.map((imei) => officerFor(imei)?.name || imei) : null,
-          };
+      const liveByImei = new Map(locs.map((l) => [l.imei, l]));
+      const list = [];
+      for (const [plate, officerImeisForPlate] of assigned) {
+        let pos = null;
+        for (const im of (plateIdx.get(plate) || [])) { const l = liveByImei.get(im); if (l) { pos = l; break; } }
+        if (!pos) continue; // can't place a customer whose bike isn't reporting now
+        list.push({
+          plate, name: customerByPlate(plate)?.name || plate,
+          lat: pos.lat, lng: pos.lng, assigned: true,
+          assignedTo: officerImeisForPlate.map((im) => officerFor(im)?.name || im),
         });
-      return sendJson(res, 200, { count: list.length, assignedCount: list.filter((c) => c.assigned).length, customers: list });
+      }
+      return sendJson(res, 200, { count: list.length, assignedCount: list.length, customers: list });
     }
 
     // Register search — fuzzy name matches for the manual-map UI / autocomplete.
@@ -367,7 +393,6 @@ const server = http.createServer(async (req, res) => {
       const hours = Number(url.searchParams.get('hours'));
       const start = Number(url.searchParams.get('start')) || now - (Number.isFinite(hours) && hours > 0 ? hours : 8) * 3600;
       const end = Number(url.searchParams.get('end')) || now;
-      await refreshCustomerGeofence().catch(() => {});
       const [points, status, loc, dayVisits, plateIdx, locs] = await Promise.all([
         gps.history(imei, start, end).catch(() => []), // a history failure must not 502 the whole view
         gps.status(imei).catch(() => null),
@@ -429,7 +454,6 @@ const server = http.createServer(async (req, res) => {
       return sendJson(res, 200, {
         office: officePlace(),
         customerRadiusM: config.proximity.customerRadiusM,
-        customerCount: customerCount(),
         hasRoster: hasRoster(),
       });
     }

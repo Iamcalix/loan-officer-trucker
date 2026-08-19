@@ -48,16 +48,22 @@ function assignedSummary(items, visits) {
 // Build the per-agent follow-list report for a date. `assignmentsByOfficer` maps
 // officerImei -> assignment items; `visitsByOfficer` maps officerImei -> logged
 // visits. (gps is unused now — kept for a stable call signature.)
-export async function buildReport(gps, date = eatToday(), assignmentsByOfficer = new Map(), visitsByOfficer = new Map()) {
+export async function buildReport(gps, date = eatToday(), assignmentsByOfficer = new Map(), visitsByOfficer = new Map(), extrasByOfficer = new Map()) {
   const officers = [...officerImeis()].map((imei) => {
     const o = officerFor(imei);
     const items = assignmentsByOfficer.get(imei) || [];
     const visits = visitsByOfficer.get(imei) || [];
+    const ex = extrasByOfficer.get(imei) || {};
     return {
       imei,
       name: o?.name || imei,
       area: o?.area || null,
       assigned: items.length ? assignedSummary(items, visits) : null,
+      // "Started work" = reached the first customer; else first activity of the day.
+      startedTs: ex.firstCustomerTs ?? ex.workStart ?? null,
+      firstCustomerTs: ex.firstCustomerTs ?? null,
+      endedTs: ex.workEnd ?? null,
+      unknownStops: ex.unknownStops || [],
     };
   });
   officers.sort((a, b) => String(a.name).localeCompare(String(b.name)));
@@ -80,27 +86,46 @@ function dur(min) {
 
 function officerBlock(o) {
   const a = o.assigned;
+  const shift = (o.startedTs || o.endedTs)
+    ? `🕒 Started ${hm(o.startedTs)}${o.firstCustomerTs ? ' (1st customer)' : ''} · finished ${hm(o.endedTs)}`
+    : 'no activity logged today';
   let h = `<div class="officer"><h2>${esc(o.name)}</h2>
-    <div class="sub">${o.area ? esc(o.area) + ' · ' : ''}${a ? `${a.visited}/${a.total} assigned customers visited` : 'no follow-list assigned today'}</div>`;
-  if (!a) return h + `<div class="muted" style="padding:6px 0">No follow-list assigned for this agent today.</div></div>`;
+    <div class="sub">${o.area ? esc(o.area) + ' · ' : ''}${a ? `${a.visited}/${a.total} assigned customers visited` : 'no follow-list assigned today'}</div>
+    <div class="sub">${shift}</div>`;
 
-  const visited = a.items.filter((i) => i.visited).sort((x, y) => y.minutes - x.minutes);
-  const notVisited = a.items.filter((i) => !i.visited);
-  h += `<div class="stats">
-    <div class="stat"><div class="n">${a.visited}/${a.total}</div><div class="l">visited</div></div>
-    <div class="stat"><div class="n">${dur(a.minutes)}</div><div class="l">total time with them</div></div>
-    <div class="stat"><div class="n">${notVisited.length}</div><div class="l">not visited</div></div>
-  </div>`;
-  h += `<table><tr><th>Customer</th><th>Status</th><th>Time with them</th><th>When</th></tr>`;
-  for (const i of visited) {
-    h += `<tr><td>${esc(i.name)}</td><td><span class="tag t-customer">Visited</span></td>
-      <td><b>${dur(i.minutes)}</b></td><td class="muted">${i.stops.map((s) => hm(s.start) + '–' + hm(s.end)).join(', ')}</td></tr>`;
+  if (a) {
+    const visited = a.items.filter((i) => i.visited).sort((x, y) => y.minutes - x.minutes);
+    const notVisited = a.items.filter((i) => !i.visited);
+    h += `<div class="stats">
+      <div class="stat"><div class="n">${a.visited}/${a.total}</div><div class="l">visited</div></div>
+      <div class="stat"><div class="n">${dur(a.minutes)}</div><div class="l">total time with them</div></div>
+      <div class="stat"><div class="n">${notVisited.length}</div><div class="l">not visited</div></div>
+      <div class="stat"><div class="n">${o.unknownStops.length}</div><div class="l">off-plan stops</div></div>
+    </div>`;
+    h += `<table><tr><th>Customer</th><th>Status</th><th>Time with them</th><th>When</th></tr>`;
+    for (const i of visited) {
+      h += `<tr><td>${esc(i.name)}</td><td><span class="tag t-customer">Visited</span></td>
+        <td><b>${dur(i.minutes)}</b></td><td class="muted">${i.stops.map((s) => hm(s.start) + '–' + hm(s.end)).join(', ')}</td></tr>`;
+    }
+    for (const i of notVisited) {
+      h += `<tr><td>${esc(i.name)}${i.matched ? '' : ' <span class="muted">(unmatched)</span>'}</td>
+        <td><span class="tag t-unknown">Not visited</span></td><td class="muted">—</td><td></td></tr>`;
+    }
+    h += `</table>`;
+  } else {
+    h += `<div class="muted" style="padding:6px 0">No follow-list assigned for this agent today.</div>`;
   }
-  for (const i of notVisited) {
-    h += `<tr><td>${esc(i.name)}${i.matched ? '' : ' <span class="muted">(unmatched)</span>'}</td>
-      <td><span class="tag t-unknown">Not visited</span></td><td class="muted">—</td><td></td></tr>`;
+
+  if (o.unknownStops.length) {
+    h += `<h3>Off-plan stops (not the office or an assigned customer) — ${o.unknownStops.length}</h3>
+      <table><tr><th>From</th><th>To</th><th>Duration</th><th>Where</th></tr>`;
+    for (const s of o.unknownStops) {
+      const loc = Number.isFinite(s.lat) ? `<a href="https://www.google.com/maps?q=${s.lat},${s.lng}" target="_blank">map</a>` : '—';
+      h += `<tr><td>${hm(s.start)}</td><td>${hm(s.end)}</td><td>${dur(s.minutes)}</td><td>${loc}</td></tr>`;
+    }
+    h += `</table>`;
   }
-  return h + `</table></div>`;
+  return h + `</div>`;
 }
 
 export function renderReportHtml(report) {

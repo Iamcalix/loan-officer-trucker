@@ -86,30 +86,46 @@ function render(j) {
   let html = `<div class="day-sum"><b>${j.date}</b> · ${withList.length} agent(s) with a follow-list · ${totVisited}/${totAssigned} assigned customers visited</div>`;
   for (const o of j.officers) {
     const a = o.assigned;
+    const uStops = o.unknownStops || [];
+    const shift = (o.startedTs || o.endedTs)
+      ? `🕒 Started ${hm(o.startedTs)}${o.firstCustomerTs ? ' (1st customer)' : ''} · finished ${hm(o.endedTs)}`
+      : 'no activity logged today';
     html += `<div class="officer">
       <h2>${o.name}</h2>
-      <div class="sub">${o.area ? o.area + ' · ' : ''}${a ? `${a.visited}/${a.total} assigned customers visited` : 'no follow-list assigned today'}</div>`;
-    if (!a) {
-      html += `<div class="muted" style="padding:6px 0">No follow-list assigned for this agent today.</div></div>`;
-      continue;
+      <div class="sub">${o.area ? o.area + ' · ' : ''}${a ? `${a.visited}/${a.total} assigned customers visited` : 'no follow-list assigned today'}</div>
+      <div class="sub">${shift}</div>`;
+    if (a) {
+      const visited = a.items.filter((i) => i.visited).sort((x, y) => y.minutes - x.minutes);
+      const notVisited = a.items.filter((i) => !i.visited);
+      html += `<div class="stats">
+          <div class="stat"><div class="n">${a.visited}/${a.total}</div><div class="l">visited</div></div>
+          <div class="stat"><div class="n">${dur(a.minutes)}</div><div class="l">total time with them</div></div>
+          <div class="stat"><div class="n">${notVisited.length}</div><div class="l">not visited</div></div>
+          <div class="stat"><div class="n">${uStops.length}</div><div class="l">off-plan stops</div></div>
+        </div>`;
+      html += `<table><tr><th>Customer</th><th>Status</th><th>Time with them</th><th>When</th></tr>`;
+      for (const i of visited) {
+        html += `<tr><td>${i.name}</td><td><span class="tag t-customer">Visited</span></td>
+          <td><b>${dur(i.minutes)}</b></td><td class="muted">${i.stops.map((s) => hm(s.start) + '–' + hm(s.end)).join(', ')}</td></tr>`;
+      }
+      for (const i of notVisited) {
+        html += `<tr><td>${i.name}${i.matched ? '' : ' <span class="muted">(unmatched)</span>'}</td>
+          <td><span class="tag t-unknown">Not visited</span></td><td class="muted">—</td><td></td></tr>`;
+      }
+      html += `</table>`;
+    } else {
+      html += `<div class="muted" style="padding:6px 0">No follow-list assigned for this agent today.</div>`;
     }
-    const visited = a.items.filter((i) => i.visited).sort((x, y) => y.minutes - x.minutes);
-    const notVisited = a.items.filter((i) => !i.visited);
-    html += `<div class="stats">
-        <div class="stat"><div class="n">${a.visited}/${a.total}</div><div class="l">visited</div></div>
-        <div class="stat"><div class="n">${dur(a.minutes)}</div><div class="l">total time with them</div></div>
-        <div class="stat"><div class="n">${notVisited.length}</div><div class="l">not visited</div></div>
-      </div>`;
-    html += `<table><tr><th>Customer</th><th>Status</th><th>Time with them</th><th>When</th></tr>`;
-    for (const i of visited) {
-      html += `<tr><td>${i.name}</td><td><span class="tag t-customer">Visited</span></td>
-        <td><b>${dur(i.minutes)}</b></td><td class="muted">${i.stops.map((s) => hm(s.start) + '–' + hm(s.end)).join(', ')}</td></tr>`;
+    if (uStops.length) {
+      html += `<h3>Off-plan stops (not the office or an assigned customer) — ${uStops.length}</h3>
+        <table><tr><th>From</th><th>To</th><th>Duration</th><th>Where</th></tr>`;
+      for (const s of uStops) {
+        const loc = isFinite(s.lat) ? `<a href="https://www.google.com/maps?q=${s.lat},${s.lng}" target="_blank">map</a>` : '—';
+        html += `<tr><td>${hm(s.start)}</td><td>${hm(s.end)}</td><td>${dur(s.minutes)}</td><td>${loc}</td></tr>`;
+      }
+      html += `</table>`;
     }
-    for (const i of notVisited) {
-      html += `<tr><td>${i.name}${i.matched ? '' : ' <span class="muted">(unmatched)</span>'}</td>
-        <td><span class="tag t-unknown">Not visited</span></td><td class="muted">—</td><td></td></tr>`;
-    }
-    html += `</table></div>`;
+    html += `</div>`;
   }
   $('wrap').innerHTML = html;
 }

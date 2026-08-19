@@ -44,30 +44,40 @@ async function persist(officerImei, s) {
   } catch { /* transient — will retry on the next sample */ }
 }
 
-// Record one officer's current classification. `place` is the classify() result
-// (a {type:'customer', id, name} or office/null). nowSec = sample time. speedKmh
-// is the officer's live speed — only a STATIONARY officer counts as "with" the
-// customer, so riding past a parked customer bike is ignored.
+// Off-plan stops are stored with this sentinel plate (no schema change needed);
+// start_ts keeps each one unique. Everything else is a real assigned-customer visit.
+const UNKNOWN_PLATE = 'UNK';
+
+// Record one officer's current state at sample time. `place` is the assigned-place
+// result ({type:'customer'|'office', name, plate} or null). Only a STATIONARY
+// officer is logged, either as WITH one of their assigned customers, or — if
+// stopped somewhere that is neither an assigned customer nor the office — as an
+// OFF-PLAN ("unknown") stop.
 export async function record(officerImei, place, nowSec, speedKmh, lat, lng) {
   const stationary = speedKmh == null ? true : speedKmh <= config.proximity.stopSpeedKmh;
-  const isCust = Boolean(place && place.type === 'customer' && stationary);
-  const plate = isCust ? normPlate(place.plate || place.name) : null;
-  const cur = open.get(officerImei);
   const hasPos = Number.isFinite(lat) && Number.isFinite(lng);
 
-  if (isCust && cur && cur.plate === plate) {
-    // still with the same customer — extend the session (keep the meeting location)
+  let target = null; // { plate, name }
+  if (place && place.type === 'customer' && stationary) {
+    const pl = normPlate(place.plate || place.name);
+    target = { plate: pl, name: customerByPlate(pl)?.name || place.name };
+  } else if (stationary && hasPos && (!place || place.type !== 'office')) {
+    target = { plate: UNKNOWN_PLATE, name: '' }; // stopped off-plan
+  }
+
+  const cur = open.get(officerImei);
+  if (target && cur && cur.plate === target.plate) {
+    // same session continues — extend it, keep the latest location
     cur.lastTs = nowSec;
     if (hasPos) { cur.lat = lat; cur.lng = lng; }
     if (nowSec - (cur.lastPersist || 0) >= 60) await persist(officerImei, cur);
     return;
   }
-  // customer changed or officer left — close the previous session for good
+  // state changed (moved on / different customer / went to office) — close previous
   if (cur) { await persist(officerImei, cur); open.delete(officerImei); }
-  if (isCust) {
-    const c = customerByPlate(plate);
+  if (target) {
     const s = {
-      day: eatDay(nowSec), plate, name: c?.name || place.name,
+      day: eatDay(nowSec), plate: target.plate, name: target.name,
       startTs: nowSec, lastTs: nowSec, lastPersist: 0,
       lat: hasPos ? lat : null, lng: hasPos ? lng : null,
     };
@@ -89,7 +99,8 @@ export async function sampleFromRows(rows, nowSec) {
 // ---- read side (report + live "met today" badge) ----
 export async function getVisits(day) {
   if (!supabaseEnabled()) return new Map();
-  const rows = await sbSelect(`visits?day=eq.${day}&select=officer_imei,customer_plate,customer_name,start_ts,end_ts,seconds,lat,lng&order=start_ts`);
+  // Real assigned-customer visits only (exclude off-plan stops).
+  const rows = await sbSelect(`visits?day=eq.${day}&customer_plate=neq.${UNKNOWN_PLATE}&select=officer_imei,customer_plate,customer_name,start_ts,end_ts,seconds,lat,lng&order=start_ts`);
   const byOfficer = new Map();
   for (const r of rows) {
     const imei = String(r.officer_imei);
@@ -111,5 +122,29 @@ export async function getVisits(day) {
     const kept = [...perCust.values()].filter((v) => v.minutes >= minMin).sort((a, b) => b.minutes - a.minutes);
     if (kept.length) out.set(imei, kept);
   }
+  return out;
+}
+
+// Per-officer extras for the report: work start/end times and off-plan (unknown)
+// stops. Derived from ALL logged sessions (customer + off-plan) for the day.
+export async function getExtras(day) {
+  if (!supabaseEnabled()) return new Map();
+  const rows = await sbSelect(`visits?day=eq.${day}&select=officer_imei,customer_plate,start_ts,end_ts,seconds,lat,lng&order=start_ts`);
+  const minSec = MIN_VISIT_SEC();
+  const out = new Map();
+  for (const r of rows) {
+    if ((r.seconds || 0) < minSec) continue; // ignore momentary stops
+    const imei = String(r.officer_imei);
+    if (!out.has(imei)) out.set(imei, { workStart: null, workEnd: null, firstCustomerTs: null, unknownStops: [] });
+    const e = out.get(imei);
+    e.workStart = e.workStart == null ? r.start_ts : Math.min(e.workStart, r.start_ts);
+    e.workEnd = e.workEnd == null ? r.end_ts : Math.max(e.workEnd, r.end_ts);
+    if (r.customer_plate === UNKNOWN_PLATE) {
+      e.unknownStops.push({ lat: r.lat, lng: r.lng, start: r.start_ts, end: r.end_ts, minutes: Math.round((r.seconds || 0) / 60) });
+    } else {
+      e.firstCustomerTs = e.firstCustomerTs == null ? r.start_ts : Math.min(e.firstCustomerTs, r.start_ts);
+    }
+  }
+  for (const e of out.values()) e.unknownStops.sort((a, b) => a.start - b.start);
   return out;
 }

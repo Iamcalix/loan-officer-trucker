@@ -11,7 +11,7 @@ import { createFleetClient } from './fleet.js';
 import { officerFor, officerImeis, hasRoster, saveRoster, initRoster } from './officers.js';
 import { loadRegister, matchCandidates, registerSize, customerByPlate } from './register.js';
 import { saveAssignments, setAssignmentPlate, getAssignments, assignedPlatesForDay } from './assignments.js';
-import { sampleFromRows, getVisits } from './visitlog.js';
+import { sampleFromRows, getVisits, getExtras } from './visitlog.js';
 import { officePlace, haversineM } from './places.js';
 import { analyzeTrack } from './visits.js';
 import { buildReport, writeReportFiles, listReports, eatToday } from './report.js';
@@ -203,8 +203,11 @@ async function makeReport(date) {
     if (!byOfficer.has(r.officerImei)) byOfficer.set(r.officerImei, []);
     byOfficer.get(r.officerImei).push(r);
   }
-  const visitsByOfficer = await getVisits(date).catch(() => new Map());
-  return buildReport(gps, date, byOfficer, visitsByOfficer);
+  const [visitsByOfficer, extrasByOfficer] = await Promise.all([
+    getVisits(date).catch(() => new Map()),
+    getExtras(date).catch(() => new Map()),
+  ]);
+  return buildReport(gps, date, byOfficer, visitsByOfficer, extrasByOfficer);
 }
 
 // -------------------------------- routing ------------------------------------

@@ -53,11 +53,13 @@ function jaccard(a, b) {
 function score(entryNorm, entryTokens, row) {
   if (row.norm === entryNorm) return 1;
   const a = entryTokens, b = row.tokens;
-  // every entered token present in the register name (e.g. "JOHN MWANGI" ⊆ full name)
-  let allIn = true;
-  for (const t of a) if (!b.has(t)) { allIn = false; break; }
+  // Containment either way: the entered name is inside the register name, OR the
+  // register name is inside the entered name (register often stores a shorter
+  // 2-name version of a 3-name customer). Both mean "same person, one extra token".
+  let allIn = true; for (const t of a) if (!b.has(t)) { allIn = false; break; }   // entered ⊆ register
+  let allRev = true; for (const t of b) if (!a.has(t)) { allRev = false; break; } // register ⊆ entered
   const j = jaccard(a, b);
-  if (allIn && a.size >= 2) return 0.9 + 0.1 * j;      // strong: entered name fully contained
+  if ((allIn || allRev) && Math.min(a.size, b.size) >= 2) return 0.9 + 0.1 * j;   // strong: one name contains the other
   if (allIn && a.size === 1) return 0.6 + 0.2 * j;     // single-name entry — weak, needs confirm
   return j;                                            // partial overlap
 }
@@ -76,14 +78,28 @@ export function matchCandidates(raw, limit = 5) {
   return scored.slice(0, limit);
 }
 
-// A confident single match, or null. Confident = top score ≥ 0.9 AND clearly ahead
-// of the runner-up (so ambiguous names fall through to manual pick instead of
-// silently mapping to the wrong customer).
+// If the raw text contains a plate that's in the register, that's the surest match
+// — the user typed the plate right in the name (e.g. "AMINA ABDALLAH ALLY MC880FVJ").
+export function plateInText(raw) {
+  for (const m of String(raw || '').toUpperCase().matchAll(/M[A-Z]?\d{3}[A-Z]{2,4}/g)) {
+    const p = m[0].replace(/[^A-Z0-9]/g, '');
+    const row = byPlate.get(p);
+    if (row) return { plate: row.plate, name: row.name, phone: row.phone, grp: row.grp, score: 1 };
+  }
+  return null;
+}
+
+// A confident single match, or null. Confident = a plate embedded in the text, an
+// exact name match, or top score ≥ 0.9 clearly ahead of the runner-up (ambiguous
+// names fall through to manual pick instead of mapping to the wrong customer).
 export function bestMatch(raw) {
+  const byPlate = plateInText(raw);
+  if (byPlate) return byPlate;
   const c = matchCandidates(raw, 2);
   if (!c.length) return null;
   const top = c[0];
   const runnerUp = c[1]?.score || 0;
+  if (top.score >= 1) return top;                                        // exact name match wins
   if (top.score >= 0.9 && (c.length === 1 || top.score - runnerUp >= 0.05)) return top;
   return null;
 }

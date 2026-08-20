@@ -13,7 +13,28 @@ import { supabaseEnabled, sbSelect } from './supa.js';
 export function normalizeName(s) {
   return String(s || '').toUpperCase().replace(/[^A-Z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
 }
-const tokensOf = (norm) => new Set(norm.split(' ').filter(Boolean));
+const tokensOf = (norm) => norm.split(' ').filter(Boolean);
+
+// Levenshtein edit distance (small strings — cheap).
+function lev(a, b) {
+  const m = a.length, n = b.length;
+  if (Math.abs(m - n) > 2) return 3; // early out — too different to be a typo
+  const d = Array.from({ length: m + 1 }, (_, i) => [i, ...new Array(n).fill(0)]);
+  for (let j = 0; j <= n; j++) d[0][j] = j;
+  for (let i = 1; i <= m; i++) for (let j = 1; j <= n; j++) {
+    d[i][j] = Math.min(d[i - 1][j] + 1, d[i][j - 1] + 1, d[i - 1][j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+  }
+  return d[m][n];
+}
+// Two name tokens are "the same" if equal, or a small misspelling of each other.
+// Only tokens ≥5 chars may fuzzy-match (short names like ALLY/SAID must be exact,
+// else different people collide); allow 1 edit (2 for long ≥8-char tokens).
+function tokenMatch(x, y) {
+  if (x === y) return true;
+  const L = Math.max(x.length, y.length);
+  if (L < 5) return false;
+  return lev(x, y) <= (L >= 8 ? 2 : 1);
+}
 
 let index = []; // [{ plate, name, phone, grp, norm, tokens }]
 let byPlate = new Map();
@@ -30,7 +51,7 @@ export async function loadRegister() {
   }
   index = rows.map((r) => {
     const norm = r.name_norm || normalizeName(r.name);
-    return { plate: r.plate, name: r.name, phone: r.phone || '', grp: r.grp || '', norm, tokens: tokensOf(norm) };
+    return { plate: r.plate, name: r.name, phone: r.phone || '', grp: r.grp || '', norm, toks: tokensOf(norm) };
   });
   byPlate = new Map(index.map((r) => [r.plate, r]));
   loadedAt = Date.now();
@@ -41,27 +62,40 @@ export function registerSize() { return index.length; }
 export function registerLoadedAt() { return loadedAt; }
 export function customerByPlate(plate) { return byPlate.get(String(plate)) || null; }
 
-// Jaccard overlap of two token sets.
-function jaccard(a, b) {
-  let inter = 0;
-  for (const t of a) if (b.has(t)) inter += 1;
-  return inter / (a.size + b.size - inter || 1);
+// Count matching tokens between two token lists — greedy, each token used once.
+// `fuzzy` allows a small misspelling to still count as a match.
+function inter(a, b, fuzzy) {
+  const used = new Array(b.length).fill(false);
+  let n = 0;
+  for (const x of a) {
+    let bi = -1;
+    for (let i = 0; i < b.length; i++) if (!used[i] && b[i] === x) { bi = i; break; }
+    if (bi < 0 && fuzzy) for (let i = 0; i < b.length; i++) if (!used[i] && tokenMatch(x, b[i])) { bi = i; break; }
+    if (bi >= 0) { used[bi] = true; n += 1; }
+  }
+  return n;
 }
 
-// Score a register row against the entered (normalized) name + its tokens.
-// Returns 0..1; higher is better. Tuned so exact/one-name-off matches rank first.
-function score(entryNorm, entryTokens, row) {
+// Score a register row against the entered (normalized) name tokens. 0..1.
+// Typo-tolerant, but SAFELY: a misspelling only wins when the two names have the
+// SAME token count and every token pairs up (a true misspelling of the same name).
+// "One name contains the other" still requires EXACT tokens, so a generic 2-name
+// register entry can't fuzzy-swallow a different longer name.
+function score(entryNorm, a, row) {
   if (row.norm === entryNorm) return 1;
-  const a = entryTokens, b = row.tokens;
-  // Containment either way: the entered name is inside the register name, OR the
-  // register name is inside the entered name (register often stores a shorter
-  // 2-name version of a 3-name customer). Both mean "same person, one extra token".
-  let allIn = true; for (const t of a) if (!b.has(t)) { allIn = false; break; }   // entered ⊆ register
-  let allRev = true; for (const t of b) if (!a.has(t)) { allRev = false; break; } // register ⊆ entered
-  const j = jaccard(a, b);
-  if ((allIn || allRev) && Math.min(a.size, b.size) >= 2) return 0.9 + 0.1 * j;   // strong: one name contains the other
-  if (allIn && a.size === 1) return 0.6 + 0.2 * j;     // single-name entry — weak, needs confirm
-  return j;                                            // partial overlap
+  const b = row.toks;
+  const nFuzzy = inter(a, b, true);
+  const nExact = inter(a, b, false);
+  const jac = nFuzzy / (a.length + b.length - nFuzzy || 1);
+  // Same length + all tokens pair up (typos allowed) → misspelling of the same name.
+  if (a.length === b.length && nFuzzy === a.length && a.length >= 2) return 0.95 + 0.05 * jac;
+  // Containment (EXACT tokens only): entered ⊆ register or register ⊆ entered.
+  const allInExact = nExact === a.length, allRevExact = nExact === b.length;
+  if ((allInExact || allRevExact) && Math.min(a.length, b.length) >= 2) {
+    return 0.9 + 0.1 * (nExact / (a.length + b.length - nExact || 1));
+  }
+  if (allInExact && a.length === 1) return 0.6 + 0.2 * jac;   // single-name entry — weak
+  return jac;                                                 // partial overlap
 }
 
 // Best matches for a raw name → [{ plate, name, phone, grp, score }] sorted desc.

@@ -108,7 +108,7 @@
     <div id="map"></div>
     <div id="summary"></div>
     <div id="hctl">
-      <span>History:</span>
+      <button id="dayroute" title="Show the selected officer's recorded route for the day">🛣 Day route</button>
       <select id="hours">
         <option value="2">last 2h</option>
         <option value="4">last 4h</option>
@@ -116,7 +116,7 @@
         <option value="12">last 12h</option>
         <option value="24">last 24h</option>
       </select>
-      <button id="live">↩ Live</button>
+      <button id="live">↩ Live all</button>
       <label style="display:flex;gap:5px;align-items:center;cursor:pointer"><input type="checkbox" id="showCust" checked /> Assigned customers</label>
     </div>
     <div id="bar">
@@ -168,10 +168,24 @@ L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
 
 const markers = new Map();   // imei -> L.marker (live)
 let officers = [];           // latest snapshot
-let selected = null;         // imei in history mode
+let selected = null;         // imei being followed (or day-route replayed)
+let dayRouteMode = false;    // true = static day-route replay; false = realtime
 let hasRoster = false;       // whether loan-officer bikes are configured
 let routeLayer = null, cursor = null, playTimer = null, points = [];
 let custLayer = null;
+// Realtime trails: accumulate each officer's live positions as they come in.
+const trailPts = new Map();  // imei -> [[lat,lng], ...]
+const trailLines = new Map();// imei -> L.polyline
+let trailLayer = null;
+function pushTrail(imei, lat, lng) {
+  let t = trailPts.get(imei);
+  if (!t) { t = []; trailPts.set(imei, t); }
+  const last = t[t.length - 1];
+  if (!last || haversine({ lat: last[0], lng: last[1] }, { lat, lng }) > 10) t.push([lat, lng]);
+  if (t.length > 150) t.shift();
+  return t;
+}
+function clearTrailLines() { if (trailLayer) trailLayer.clearLayers(); trailLines.clear(); }
 
 const $ = (id) => document.getElementById(id);
 const fmt = (s) => s ? new Date(s * 1000).toLocaleString() : '—';
@@ -212,7 +226,7 @@ async function loadLive() {
       ? `${officers.length} officer${officers.length === 1 ? '' : 's'} · updated ${when}`
       : `No loan-officer bikes set yet — showing customers · ${when}`;
     renderList();
-    if (!selected) renderMarkers();
+    if (!dayRouteMode) renderMarkers(); // keep updating live (incl. while following one)
   } catch (e) { $('meta').textContent = 'error loading live data'; }
 }
 
@@ -240,9 +254,13 @@ async function loadCustomers() {
 }
 
 function renderMarkers() {
+  if (!trailLayer) trailLayer = L.layerGroup().addTo(map);
   const seen = new Set();
   for (const o of officers) {
+    if (!isFinite(o.lat) || !isFinite(o.lng)) continue;
     seen.add(o.imei);
+    const isSel = o.imei === selected;
+    const dim = selected && !isSel;
     const state = o.status?.state || 'moving';
     const tip = `${o.name} — ${o.status?.text || ''}`;
     let m = markers.get(o.imei);
@@ -256,8 +274,30 @@ function renderMarkers() {
       m.setIcon(personIcon(state));
       m.setTooltipContent(tip);
     }
+    m.setOpacity(dim ? 0.35 : 1);
+    m.setZIndexOffset(isSel ? 1000 : 0);
+
+    // Realtime trail: grow the officer's recent path. When one is followed, show
+    // only their trail (bright); otherwise show every officer's trail faintly.
+    const pts = pushTrail(o.imei, o.lat, o.lng);
+    const showTrail = pts.length > 1 && (!selected || isSel);
+    let tl = trailLines.get(o.imei);
+    if (showTrail) {
+      const style = { color: stateColor(state), weight: isSel ? 4 : 2, opacity: isSel ? 0.9 : 0.45 };
+      if (!tl) { tl = L.polyline(pts, style).addTo(trailLayer); trailLines.set(o.imei, tl); }
+      else { tl.setLatLngs(pts); tl.setStyle(style); }
+    } else if (tl) { trailLayer.removeLayer(tl); trailLines.delete(o.imei); }
   }
-  for (const [imei, m] of markers) if (!seen.has(imei)) { map.removeLayer(m); markers.delete(imei); }
+  for (const [imei, m] of markers) if (!seen.has(imei)) {
+    map.removeLayer(m); markers.delete(imei);
+    const tl = trailLines.get(imei); if (tl) { trailLayer.removeLayer(tl); trailLines.delete(imei); }
+  }
+  // Keep the followed officer in view without fighting the user's panning.
+  if (selected && !dayRouteMode) {
+    const o = officers.find((x) => x.imei === selected);
+    if (o && isFinite(o.lat) && !map.getBounds().contains([o.lat, o.lng])) map.panTo([o.lat, o.lng]);
+    if (o) $('meta').textContent = `● Following ${o.name} live · ${o.status?.text || ''}`;
+  }
 }
 
 function clearMarkers() { for (const [, m] of markers) map.removeLayer(m); markers.clear(); }
@@ -288,10 +328,27 @@ function renderList() {
   }
 }
 
-async function selectOfficer(imei) {
-  selected = imei;
+// Click an officer → follow them LIVE in realtime (position + growing trail),
+// with their assigned customers visible so you watch them move toward a customer.
+function selectOfficer(imei) {
+  selected = imei; dayRouteMode = false;
+  if (playTimer) { clearInterval(playTimer); playTimer = null; $('play').textContent = '▶'; }
+  if (routeLayer) { map.removeLayer(routeLayer); routeLayer = null; }
+  if (cursor) { map.removeLayer(cursor); cursor = null; }
+  $('bar').classList.remove('show'); $('summary').classList.remove('show');
   renderList();
-  clearMarkers();
+  if (custLayer && $('showCust').checked) custLayer.addTo(map);
+  const o = officers.find((x) => x.imei === imei);
+  if (o && isFinite(o.lat)) map.setView([o.lat, o.lng], 16);
+  renderMarkers();
+  $('meta').textContent = o ? `● Following ${o.name} live · ${o.status?.text || ''}` : 'Following…';
+}
+
+// Load the day's historical route replay for the selected officer (explicit).
+async function loadDayRoute(imei) {
+  selected = imei; dayRouteMode = true;
+  renderList();
+  clearMarkers(); clearTrailLines();
   if (custLayer) map.removeLayer(custLayer); // clean map for the route
   const hours = $('hours').value;
   const name = (officers.find((o) => o.imei === imei) || {}).name || imei;
@@ -421,13 +478,17 @@ $('play').onclick = () => {
     s.value = v; updateCursor(v);
   }, 250);
 };
-$('hours').onchange = () => { if (selected) selectOfficer(selected); };
+$('hours').onchange = () => { if (selected && dayRouteMode) loadDayRoute(selected); };
 $('search').oninput = renderList;
 $('live').onclick = goLive;
+$('dayroute').onclick = () => {
+  if (selected) loadDayRoute(selected);
+  else $('meta').textContent = 'Click an officer first, then “Day route”.';
+};
 
 function goLive() {
   if (playTimer) { clearInterval(playTimer); playTimer = null; $('play').textContent = '▶'; }
-  selected = null;
+  selected = null; dayRouteMode = false;
   if (routeLayer) { map.removeLayer(routeLayer); routeLayer = null; }
   if (cursor) { map.removeLayer(cursor); cursor = null; }
   $('bar').classList.remove('show');

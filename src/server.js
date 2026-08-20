@@ -345,6 +345,13 @@ const server = http.createServer(async (req, res) => {
       return sendJson(res, 200, { size: registerSize(), matches: q ? matchCandidates(q, limit) : [] });
     }
 
+    // Force an immediate reload of the customer register from Supabase (after a
+    // bulk import) instead of waiting for the periodic refresh.
+    if (p === '/api/register/reload' && req.method === 'POST') {
+      const list = await loadRegister();
+      return sendJson(res, 200, { ok: true, size: list.length });
+    }
+
     // Import an officer's daily follow-list: { officerImei, names:[...], day? }.
     if (p === '/api/assignments' && req.method === 'POST') {
       const body = await readBody(req);

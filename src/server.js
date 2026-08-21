@@ -67,51 +67,45 @@ async function getLiveLocations() {
   return data;
 }
 
-// The app now tracks ONLY each agent's assigned follow-list customers (not every
-// bike). For a day, resolve each officer's assigned customer plates to their bike's
-// current position, so proximity is checked against just those customers.
-async function assignedPositionsByOfficer(day, locs) {
-  const [rows, plateIdx] = await Promise.all([
-    getAssignments(day).catch(() => []),
-    getPlateIndex().catch(() => new Map()),
-  ]);
-  const liveByImei = new Map(locs.map((l) => [l.imei, l]));
+// Each officer's set of assigned follow-list plates for the day.
+async function assignedPlatesByOfficer(day) {
+  const rows = await getAssignments(day).catch(() => []);
   const map = new Map();
   for (const r of rows) {
     if (!r.plate) continue;
-    const np = normPlate(r.plate);
-    let pos = null;
-    for (const im of (plateIdx.get(np) || [])) { const l = liveByImei.get(im); if (l) { pos = l; break; } }
-    if (!map.has(r.officerImei)) map.set(r.officerImei, []);
-    map.get(r.officerImei).push({ plate: np, name: r.name, lat: pos ? pos.lat : null, lng: pos ? pos.lng : null });
+    if (!map.has(r.officerImei)) map.set(r.officerImei, new Set());
+    map.get(r.officerImei).add(normPlate(r.plate));
   }
   return map;
 }
 
-// Where is this officer? The office, or the nearest of THEIR assigned customers
-// within range — nothing else counts anymore.
-function assignedPlace(officerPos, assigned) {
+// Where is this officer? The office, or the nearest CUSTOMER bike within range —
+// preferring one of THEIR assigned customers, else flagging it as unassigned.
+// (Office wins first and is never reported as a "meeting".)
+function placeFor(officerPos, customerBikes, assignedSet) {
   const office = officePlace();
   if (office) {
     const d = haversineM(officerPos, office);
     if (d <= office.radiusM) return { type: 'office', name: office.name, distM: Math.round(d) };
   }
-  let best = null;
-  for (const c of (assigned || [])) {
-    if (!Number.isFinite(c.lat) || !Number.isFinite(c.lng)) continue;
+  const R = config.proximity.customerRadiusM;
+  let bestA = null, bestU = null;
+  for (const c of customerBikes) {
     const d = haversineM(officerPos, c);
-    if (d <= config.proximity.customerRadiusM && (!best || d < best.distM)) {
-      best = { type: 'customer', name: c.name, plate: c.plate, distM: Math.round(d) };
-    }
+    if (d > R) continue;
+    if (assignedSet.has(c.plate)) { if (!bestA || d < bestA.d) bestA = { d, plate: c.plate, name: c.name }; }
+    else if (!bestU || d < bestU.d) bestU = { d, plate: c.plate, name: c.name };
   }
-  return best;
+  const pick = bestA || bestU; // assigned customers take priority over unassigned
+  if (pick) return { type: 'customer', plate: pick.plate, name: pick.name, assigned: Boolean(bestA), distM: Math.round(pick.d) };
+  return null;
 }
 
 // Live status label from a fix + optional real-time status.
 function liveLabel(place, st) {
   if (st && st.online === false) return { state: 'offline', text: 'Offline' };
   if (place?.type === 'office') return { state: 'office', text: `At ${place.name}` };
-  if (place?.type === 'customer') return { state: 'customer', text: `With ${place.name}` };
+  if (place?.type === 'customer') return { state: 'customer', text: `With ${place.name}${place.assigned ? '' : ' (unassigned)'}` };
   const moving = st && st.speedKmh != null && st.speedKmh > config.proximity.movingSpeedKmh;
   if (moving) return { state: 'moving', text: `Moving ${Math.round(st.speedKmh)} km/h` };
   return { state: 'stopped', text: 'Stopped (no known place)' };
@@ -123,8 +117,15 @@ async function buildSnapshot() {
   const restrict = roster.size > 0;
   let rows = restrict ? locs.filter((l) => roster.has(l.imei)) : [];
 
-  // Each officer is placed against ONLY their assigned follow-list customers today.
-  const assignedByOff = restrict ? await assignedPositionsByOfficer(eatToday(), locs).catch(() => new Map()) : new Map();
+  // Assigned plates per officer, and every customer bike (non-officer) with its
+  // plate + register name — so we can tell WHOM an officer is with, assigned or not.
+  const assignedByOff = restrict ? await assignedPlatesByOfficer(eatToday()).catch(() => new Map()) : new Map();
+  const customerBikes = restrict
+    ? locs.filter((l) => !roster.has(l.imei)).map((l) => {
+        const plate = normPlate(names.get(l.imei) || '');
+        return plate ? { lat: l.lat, lng: l.lng, plate, name: customerByPlate(plate)?.name || names.get(l.imei) || l.imei } : null;
+      }).filter(Boolean)
+    : [];
 
   // With a (small) roster we can afford one live status call each, so we can tell
   // moving vs stopped and online vs offline. Without a roster we skip that.
@@ -140,7 +141,7 @@ async function buildSnapshot() {
 
   const snapshot = rows.map((l) => {
     const o = officerFor(l.imei);
-    const place = assignedPlace(l, assignedByOff.get(l.imei));
+    const place = placeFor(l, customerBikes, assignedByOff.get(l.imei) || new Set());
     const st = statusByImei.get(l.imei) || null;
     return {
       imei: l.imei,
@@ -149,12 +150,12 @@ async function buildSnapshot() {
       area: o?.area || null,
       lat: l.lat,
       lng: l.lng,
-      place: place ? { type: place.type, name: place.name, plate: place.plate || null, distM: place.distM } : null,
+      place: place ? { type: place.type, name: place.name, plate: place.plate || null, assigned: place.assigned !== false, distM: place.distM } : null,
       status: liveLabel(place, st),
       online: st ? st.online : null,
       speedKmh: st ? st.speedKmh : null,
       ageSec: st ? st.ageSec : null,
-      assignedCount: (assignedByOff.get(l.imei) || []).length,
+      assignedCount: (assignedByOff.get(l.imei) || new Set()).size,
     };
   });
 

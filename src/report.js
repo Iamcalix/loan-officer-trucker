@@ -63,11 +63,18 @@ export async function buildReport(gps, date = eatToday(), assignmentsByOfficer =
         for (const s of it.stops) firstCustomerTs = firstCustomerTs == null ? s.start : Math.min(firstCustomerTs, s.start);
       }
     }
+    // Customers the officer spent ≥5min with that were NOT on their follow-list.
+    const assignedPlates = new Set(items.filter((i) => i.plate).map((i) => normPlate(i.plate)));
+    const unassigned = visits
+      .filter((v) => !assignedPlates.has(normPlate(v.plate || v.name)))
+      .map((v) => ({ name: v.name, plate: v.plate || null, minutes: v.minutes, stops: v.stops }))
+      .sort((x, y) => y.minutes - x.minutes);
     return {
       imei,
       name: o?.name || imei,
       area: o?.area || null,
       assigned,
+      unassigned,
       // "Started" = reached the first assigned customer, else first activity of the day.
       startedTs: firstCustomerTs ?? ex.workStart ?? null,
       firstCustomerTs,
@@ -123,6 +130,16 @@ function officerBlock(o) {
     h += `</table>`;
   } else {
     h += `<div class="muted" style="padding:6px 0">No follow-list assigned for this agent today.</div>`;
+  }
+
+  if (o.unassigned && o.unassigned.length) {
+    h += `<h3>Met unassigned customers (not on their follow-list) — ${o.unassigned.length}</h3>
+      <table><tr><th>Customer</th><th>Time with them</th><th>When</th></tr>`;
+    for (const u of o.unassigned) {
+      h += `<tr><td>${esc(u.name)}</td><td><b>${dur(u.minutes)}</b></td>
+        <td class="muted">${u.stops.map((s) => hm(s.start) + '–' + hm(s.end)).join(', ')}</td></tr>`;
+    }
+    h += `</table>`;
   }
 
   if (o.unknownStops.length) {

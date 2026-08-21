@@ -116,6 +116,16 @@ function render(j) {
     } else {
       html += `<div class="muted" style="padding:6px 0">No follow-list assigned for this agent today.</div>`;
     }
+    const unassigned = o.unassigned || [];
+    if (unassigned.length) {
+      html += `<h3>Met unassigned customers (not on their follow-list) — ${unassigned.length}</h3>
+        <table><tr><th>Customer</th><th>Time with them</th><th>When</th></tr>`;
+      for (const u of unassigned) {
+        html += `<tr><td>${u.name}</td><td><b>${dur(u.minutes)}</b></td>
+          <td class="muted">${u.stops.map((s) => hm(s.start) + '–' + hm(s.end)).join(', ')}</td></tr>`;
+      }
+      html += `</table>`;
+    }
     if (uStops.length) {
       html += `<h3>Off-plan stops (not the office or an assigned customer) — ${uStops.length}</h3>
         <table><tr><th>From</th><th>To</th><th>Duration</th><th>Where</th></tr>`;

@@ -25,8 +25,9 @@ function assignedSummary(items, visits) {
   for (const v of visits) {
     const p = normPlate(v.plate || v.name);
     if (!p) continue;
-    const cur = byPlate.get(p) || { minutes: 0, stops: [] };
+    const cur = byPlate.get(p) || { minutes: 0, stops: [], lat: null, lng: null };
     cur.minutes += v.minutes; cur.stops.push(...v.stops);
+    if (Number.isFinite(v.lat) && Number.isFinite(v.lng)) { cur.lat = v.lat; cur.lng = v.lng; }
     byPlate.set(p, cur);
   }
   const list = items.map((it) => {
@@ -34,6 +35,7 @@ function assignedSummary(items, visits) {
     return {
       name: it.name, plate: it.plate || null, matched: Boolean(it.matched),
       visited: Boolean(hit), minutes: hit ? hit.minutes : 0, stops: hit ? hit.stops : [],
+      lat: hit ? hit.lat : null, lng: hit ? hit.lng : null,
     };
   });
   return {
@@ -67,7 +69,7 @@ export async function buildReport(gps, date = eatToday(), assignmentsByOfficer =
     const assignedPlates = new Set(items.filter((i) => i.plate).map((i) => normPlate(i.plate)));
     const unassigned = visits
       .filter((v) => !assignedPlates.has(normPlate(v.plate || v.name)))
-      .map((v) => ({ name: v.name, plate: v.plate || null, minutes: v.minutes, stops: v.stops }))
+      .map((v) => ({ name: v.name, plate: v.plate || null, minutes: v.minutes, stops: v.stops, lat: v.lat, lng: v.lng }))
       .sort((x, y) => y.minutes - x.minutes);
     return {
       imei,
@@ -118,14 +120,15 @@ function officerBlock(o) {
       <div class="stat"><div class="n">${notVisited.length}</div><div class="l">not visited</div></div>
       <div class="stat"><div class="n">${o.unknownStops.length}</div><div class="l">off-plan stops</div></div>
     </div>`;
-    h += `<table><tr><th>Customer</th><th>Status</th><th>Time with them</th><th>When</th></tr>`;
+    h += `<table><tr><th>Customer</th><th>Status</th><th>Time with them</th><th>When</th><th>Where</th></tr>`;
     for (const i of visited) {
+      const where = Number.isFinite(i.lat) ? `<a href="https://www.google.com/maps?q=${i.lat},${i.lng}" target="_blank">map</a>` : '—';
       h += `<tr><td>${esc(i.name)}</td><td><span class="tag t-customer">Visited</span></td>
-        <td><b>${dur(i.minutes)}</b></td><td class="muted">${i.stops.map((s) => hm(s.start) + '–' + hm(s.end)).join(', ')}</td></tr>`;
+        <td><b>${dur(i.minutes)}</b></td><td class="muted">${i.stops.map((s) => hm(s.start) + '–' + hm(s.end)).join(', ')}</td><td>${where}</td></tr>`;
     }
     for (const i of notVisited) {
       h += `<tr><td>${esc(i.name)}${i.matched ? '' : ' <span class="muted">(unmatched)</span>'}</td>
-        <td><span class="tag t-unknown">Not visited</span></td><td class="muted">—</td><td></td></tr>`;
+        <td><span class="tag t-unknown">Not visited</span></td><td class="muted">—</td><td></td><td class="muted">—</td></tr>`;
     }
     h += `</table>`;
   } else {
@@ -134,10 +137,11 @@ function officerBlock(o) {
 
   if (o.unassigned && o.unassigned.length) {
     h += `<h3>Met unassigned customers (not on their follow-list) — ${o.unassigned.length}</h3>
-      <table><tr><th>Customer</th><th>Time with them</th><th>When</th></tr>`;
+      <table><tr><th>Customer</th><th>Time with them</th><th>When</th><th>Where</th></tr>`;
     for (const u of o.unassigned) {
+      const where = Number.isFinite(u.lat) ? `<a href="https://www.google.com/maps?q=${u.lat},${u.lng}" target="_blank">map</a>` : '—';
       h += `<tr><td>${esc(u.name)}</td><td><b>${dur(u.minutes)}</b></td>
-        <td class="muted">${u.stops.map((s) => hm(s.start) + '–' + hm(s.end)).join(', ')}</td></tr>`;
+        <td class="muted">${u.stops.map((s) => hm(s.start) + '–' + hm(s.end)).join(', ')}</td><td>${where}</td></tr>`;
     }
     h += `</table>`;
   }

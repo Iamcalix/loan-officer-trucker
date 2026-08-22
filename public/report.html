@@ -103,14 +103,15 @@ function render(j) {
           <div class="stat"><div class="n">${notVisited.length}</div><div class="l">not visited</div></div>
           <div class="stat"><div class="n">${uStops.length}</div><div class="l">off-plan stops</div></div>
         </div>`;
-      html += `<table><tr><th>Customer</th><th>Status</th><th>Time with them</th><th>When</th></tr>`;
+      html += `<table><tr><th>Customer</th><th>Status</th><th>Time with them</th><th>When</th><th>Where</th></tr>`;
       for (const i of visited) {
+        const where = isFinite(i.lat) ? `<a href="https://www.google.com/maps?q=${i.lat},${i.lng}" target="_blank">map</a>` : '—';
         html += `<tr><td>${i.name}</td><td><span class="tag t-customer">Visited</span></td>
-          <td><b>${dur(i.minutes)}</b></td><td class="muted">${i.stops.map((s) => hm(s.start) + '–' + hm(s.end)).join(', ')}</td></tr>`;
+          <td><b>${dur(i.minutes)}</b></td><td class="muted">${i.stops.map((s) => hm(s.start) + '–' + hm(s.end)).join(', ')}</td><td>${where}</td></tr>`;
       }
       for (const i of notVisited) {
         html += `<tr><td>${i.name}${i.matched ? '' : ' <span class="muted">(unmatched)</span>'}</td>
-          <td><span class="tag t-unknown">Not visited</span></td><td class="muted">—</td><td></td></tr>`;
+          <td><span class="tag t-unknown">Not visited</span></td><td class="muted">—</td><td></td><td class="muted">—</td></tr>`;
       }
       html += `</table>`;
     } else {
@@ -119,10 +120,11 @@ function render(j) {
     const unassigned = o.unassigned || [];
     if (unassigned.length) {
       html += `<h3>Met unassigned customers (not on their follow-list) — ${unassigned.length}</h3>
-        <table><tr><th>Customer</th><th>Time with them</th><th>When</th></tr>`;
+        <table><tr><th>Customer</th><th>Time with them</th><th>When</th><th>Where</th></tr>`;
       for (const u of unassigned) {
+        const where = isFinite(u.lat) ? `<a href="https://www.google.com/maps?q=${u.lat},${u.lng}" target="_blank">map</a>` : '—';
         html += `<tr><td>${u.name}</td><td><b>${dur(u.minutes)}</b></td>
-          <td class="muted">${u.stops.map((s) => hm(s.start) + '–' + hm(s.end)).join(', ')}</td></tr>`;
+          <td class="muted">${u.stops.map((s) => hm(s.start) + '–' + hm(s.end)).join(', ')}</td><td>${where}</td></tr>`;
       }
       html += `</table>`;
     }

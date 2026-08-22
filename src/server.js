@@ -41,7 +41,10 @@ async function getDeviceNames() {
 // Reverse index: normalized plate -> [imei, ...] (a plate can have >1 tracker),
 // rebuilt whenever the device-name cache changes. Lets a register plate resolve to
 // its live tracker(s).
-const normPlate = (s) => String(s || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+// Canonical plate key: strip punctuation AND a trailing tracker-index digit
+// (Wanway/18gps name a bike's two trackers "MC693FML [1]" / "[2]"; real plates end
+// in letters, so trailing digits after a letter are always the tracker index).
+const normPlate = (s) => String(s || '').toUpperCase().replace(/[^A-Z0-9]/g, '').replace(/([A-Z])\d+$/, '$1');
 let plateIndex = { at: 0, map: new Map() };
 async function getPlateIndex() {
   const names = await getDeviceNames();

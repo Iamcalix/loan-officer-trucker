@@ -16,7 +16,9 @@ import { config } from './config.js';
 import { supabaseEnabled, sb, sbSelect } from './supa.js';
 import { customerByPlate } from './register.js';
 
-const normPlate = (s) => String(s || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+// Canonical plate key — also strips a trailing tracker-index digit ("MC693FML1" →
+// "MC693FML") so a bike's two trackers map to one plate.
+const normPlate = (s) => String(s || '').toUpperCase().replace(/[^A-Z0-9]/g, '').replace(/([A-Z])\d+$/, '$1');
 const eatDay = (sec) => new Date((sec + 3 * 3600) * 1000).toISOString().slice(0, 10);
 // A real "visit" = officer parked NEAR a customer for at least this long. Anything
 // shorter is a drive-by (a rider passes dozens of parked customer bikes a day) and
@@ -109,8 +111,8 @@ export async function getVisits(day) {
     const imei = String(r.officer_imei);
     if (!byOfficer.has(imei)) byOfficer.set(imei, new Map());
     const perCust = byOfficer.get(imei);
-    const key = r.customer_plate;
-    const v = perCust.get(key) || { plate: r.customer_plate, name: r.customer_name || r.customer_plate, phone: '', minutes: 0, stops: [], lat: null, lng: null };
+    const key = normPlate(r.customer_plate); // canonical → merges MC693FML1/MC693FML2
+    const v = perCust.get(key) || { plate: key, name: customerByPlate(key)?.name || r.customer_name || key, phone: '', minutes: 0, stops: [], lat: null, lng: null };
     v.minutes += Math.round((r.seconds || 0) / 60);
     v.stops.push({ start: r.start_ts, end: r.end_ts, minutes: Math.round((r.seconds || 0) / 60) });
     // Keep a meeting location for the map (prefer the longest/most recent session).

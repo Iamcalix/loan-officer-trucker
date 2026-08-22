@@ -13,6 +13,8 @@ import { supabaseEnabled, sbSelect } from './supa.js';
 export function normalizeName(s) {
   return String(s || '').toUpperCase().replace(/[^A-Z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
 }
+// Canonical plate key — strips a trailing tracker-index digit ("MC693FML1" → "MC693FML").
+const normPlate = (s) => String(s || '').toUpperCase().replace(/[^A-Z0-9]/g, '').replace(/([A-Z])\d+$/, '$1');
 const tokensOf = (norm) => norm.split(' ').filter(Boolean);
 
 // Levenshtein edit distance (small strings — cheap).
@@ -53,14 +55,14 @@ export async function loadRegister() {
     const norm = r.name_norm || normalizeName(r.name);
     return { plate: r.plate, name: r.name, phone: r.phone || '', grp: r.grp || '', norm, toks: tokensOf(norm) };
   });
-  byPlate = new Map(index.map((r) => [r.plate, r]));
+  byPlate = new Map(index.map((r) => [normPlate(r.plate), r]));
   loadedAt = Date.now();
   return index;
 }
 
 export function registerSize() { return index.length; }
 export function registerLoadedAt() { return loadedAt; }
-export function customerByPlate(plate) { return byPlate.get(String(plate)) || null; }
+export function customerByPlate(plate) { return byPlate.get(normPlate(plate)) || null; }
 
 // Count matching tokens between two token lists — greedy, each token used once.
 // `fuzzy` allows a small misspelling to still count as a match.
@@ -116,7 +118,7 @@ export function matchCandidates(raw, limit = 5) {
 // — the user typed the plate right in the name (e.g. "AMINA ABDALLAH ALLY MC880FVJ").
 export function plateInText(raw) {
   for (const m of String(raw || '').toUpperCase().matchAll(/M[A-Z]?\d{3}[A-Z]{2,4}/g)) {
-    const p = m[0].replace(/[^A-Z0-9]/g, '');
+    const p = normPlate(m[0]);
     const row = byPlate.get(p);
     if (row) return { plate: row.plate, name: row.name, phone: row.phone, grp: row.grp, score: 1 };
   }

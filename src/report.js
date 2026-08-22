@@ -16,7 +16,9 @@ export function eatYesterday() {
   return new Date(Date.now() + 3 * 3600_000 - 86400_000).toISOString().slice(0, 10);
 }
 
-const normPlate = (s) => String(s || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+// Canonical plate key — also strips a trailing tracker-index digit ("MC693FML1" →
+// "MC693FML") so a bike's two trackers map to one plate.
+const normPlate = (s) => String(s || '').toUpperCase().replace(/[^A-Z0-9]/g, '').replace(/([A-Z])\d+$/, '$1');
 
 // Cross-reference an agent's assigned follow-list against the customers they were
 // actually logged with → visited (with duration) vs. not visited.

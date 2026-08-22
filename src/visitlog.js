@@ -44,9 +44,10 @@ async function persist(officerImei, s) {
   } catch { /* transient — will retry on the next sample */ }
 }
 
-// Off-plan stops are stored with this sentinel plate (no schema change needed);
-// start_ts keeps each one unique. Everything else is a real assigned-customer visit.
+// Sentinel plates (no schema change): off-plan stop, and time-at-office (so we can
+// report when the officer left the head office). start_ts keeps each row unique.
 const UNKNOWN_PLATE = 'UNK';
+const OFFICE_PLATE = 'OFFICE';
 
 // Record one officer's current state at sample time. `place` is the assigned-place
 // result ({type:'customer'|'office', name, plate} or null). Only a STATIONARY
@@ -61,7 +62,9 @@ export async function record(officerImei, place, nowSec, speedKmh, lat, lng) {
   if (place && place.type === 'customer' && stationary) {
     const pl = normPlate(place.plate || place.name);
     target = { plate: pl, name: customerByPlate(pl)?.name || place.name };
-  } else if (stationary && hasPos && (!place || place.type !== 'office')) {
+  } else if (place && place.type === 'office') {
+    target = { plate: OFFICE_PLATE, name: '' }; // at the head office — track presence to know when they leave
+  } else if (stationary && hasPos && !place) {
     target = { plate: UNKNOWN_PLATE, name: '' }; // stopped off-plan
   }
 
@@ -99,8 +102,8 @@ export async function sampleFromRows(rows, nowSec) {
 // ---- read side (report + live "met today" badge) ----
 export async function getVisits(day) {
   if (!supabaseEnabled()) return new Map();
-  // Real assigned-customer visits only (exclude off-plan stops).
-  const rows = await sbSelect(`visits?day=eq.${day}&customer_plate=neq.${UNKNOWN_PLATE}&select=officer_imei,customer_plate,customer_name,start_ts,end_ts,seconds,lat,lng&order=start_ts`);
+  // Real customer visits only (exclude off-plan stops and office presence).
+  const rows = await sbSelect(`visits?day=eq.${day}&customer_plate=not.in.(${UNKNOWN_PLATE},${OFFICE_PLATE})&select=officer_imei,customer_plate,customer_name,start_ts,end_ts,seconds,lat,lng&order=start_ts`);
   const byOfficer = new Map();
   for (const r of rows) {
     const imei = String(r.officer_imei);
@@ -132,11 +135,18 @@ export async function getExtras(day) {
   const rows = await sbSelect(`visits?day=eq.${day}&select=officer_imei,customer_plate,start_ts,end_ts,seconds,lat,lng&order=start_ts`);
   const minSec = MIN_VISIT_SEC();
   const out = new Map();
+  const get = (imei) => {
+    if (!out.has(imei)) out.set(imei, { workStart: null, workEnd: null, firstCustomerTs: null, leftOfficeTs: null, unknownStops: [] });
+    return out.get(imei);
+  };
   for (const r of rows) {
     if ((r.seconds || 0) < minSec) continue; // ignore momentary stops
-    const imei = String(r.officer_imei);
-    if (!out.has(imei)) out.set(imei, { workStart: null, workEnd: null, firstCustomerTs: null, unknownStops: [] });
-    const e = out.get(imei);
+    const e = get(String(r.officer_imei));
+    if (r.customer_plate === OFFICE_PLATE) {
+      // "Left office" = when the EARLIEST office presence ended (departed for the field).
+      e.leftOfficeTs = e.leftOfficeTs == null ? r.end_ts : Math.min(e.leftOfficeTs, r.end_ts);
+      continue; // office is not field activity — don't count toward work start/end
+    }
     e.workStart = e.workStart == null ? r.start_ts : Math.min(e.workStart, r.start_ts);
     e.workEnd = e.workEnd == null ? r.end_ts : Math.max(e.workEnd, r.end_ts);
     if (r.customer_plate === UNKNOWN_PLATE) {

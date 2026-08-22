@@ -80,6 +80,7 @@ export async function buildReport(gps, date = eatToday(), assignmentsByOfficer =
       // "Started" = reached the first assigned customer, else first activity of the day.
       startedTs: firstCustomerTs ?? ex.workStart ?? null,
       firstCustomerTs,
+      leftOfficeTs: ex.leftOfficeTs ?? null,
       endedTs: ex.workEnd ?? null,
       unknownStops: ex.unknownStops || [],
     };
@@ -104,8 +105,8 @@ function dur(min) {
 
 function officerBlock(o) {
   const a = o.assigned;
-  const shift = (o.startedTs || o.endedTs)
-    ? `🕒 Started ${hm(o.startedTs)}${o.firstCustomerTs ? ' (1st customer)' : ''} · finished ${hm(o.endedTs)}`
+  const shift = (o.startedTs || o.endedTs || o.leftOfficeTs)
+    ? `🕒 Started ${hm(o.startedTs)}${o.firstCustomerTs ? ' (1st customer)' : ''}${o.leftOfficeTs ? ` · left head office ${hm(o.leftOfficeTs)}` : ''} · finished ${hm(o.endedTs)}`
     : 'no activity logged today';
   let h = `<div class="officer"><h2>${esc(o.name)}</h2>
     <div class="sub">${o.area ? esc(o.area) + ' · ' : ''}${a ? `${a.visited}/${a.total} assigned customers visited` : 'no follow-list assigned today'}</div>

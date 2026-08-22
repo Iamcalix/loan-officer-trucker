@@ -87,8 +87,8 @@ function render(j) {
   for (const o of j.officers) {
     const a = o.assigned;
     const uStops = o.unknownStops || [];
-    const shift = (o.startedTs || o.endedTs)
-      ? `🕒 Started ${hm(o.startedTs)}${o.firstCustomerTs ? ' (1st customer)' : ''} · finished ${hm(o.endedTs)}`
+    const shift = (o.startedTs || o.endedTs || o.leftOfficeTs)
+      ? `🕒 Started ${hm(o.startedTs)}${o.firstCustomerTs ? ' (1st customer)' : ''}${o.leftOfficeTs ? ` · left head office ${hm(o.leftOfficeTs)}` : ''} · finished ${hm(o.endedTs)}`
       : 'no activity logged today';
     html += `<div class="officer">
       <h2>${o.name}</h2>

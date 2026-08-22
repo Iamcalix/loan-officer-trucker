@@ -117,9 +117,11 @@ export async function getVisits(day) {
     if (Number.isFinite(r.lat) && Number.isFinite(r.lng)) { v.lat = r.lat; v.lng = r.lng; }
     perCust.set(key, v);
   }
-  // → Map(officerImei -> [visit,...]), keeping only customers the officer actually
-  // spent real time with (filters drive-by proximity that would inflate the count).
-  const minMin = Math.max(1, Math.round(MIN_VISIT_SEC() / 60));
+  // → Map(officerImei -> [visit,...]). Keep any real STATIONARY presence (≥1min);
+  // sessions already require the officer to be stopped, so this isn't a drive-by.
+  // The report applies the stricter 5-min bar only to UNASSIGNED meetings; an
+  // assigned customer counts as visited on any real stop (they were sent there).
+  const minMin = 1;
   const out = new Map();
   for (const [imei, perCust] of byOfficer) {
     const kept = [...perCust.values()].filter((v) => v.minutes >= minMin).sort((a, b) => b.minutes - a.minutes);

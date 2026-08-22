@@ -165,9 +165,11 @@ async function buildSnapshot() {
   await sampleFromRows(snapshot, now).catch(() => {});
   const met = await metTodayMap().catch(() => new Map());
   for (const s of snapshot) {
-    const v = met.get(s.imei) || [];
-    s.metToday = v.length;
-    s.withCustomersMinToday = v.reduce((sum, x) => sum + x.minutes, 0);
+    const aset = assignedByOff.get(s.imei) || new Set();
+    // Count an assigned customer on any real stop; an unassigned one only at ≥5min.
+    const counted = (met.get(s.imei) || []).filter((v) => aset.has(normPlate(v.plate || v.name)) || v.minutes >= 5);
+    s.metToday = counted.length;
+    s.withCustomersMinToday = counted.reduce((sum, x) => sum + x.minutes, 0);
   }
   return snapshot;
 }

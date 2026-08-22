@@ -67,8 +67,9 @@ export async function buildReport(gps, date = eatToday(), assignmentsByOfficer =
     }
     // Customers the officer spent ≥5min with that were NOT on their follow-list.
     const assignedPlates = new Set(items.filter((i) => i.plate).map((i) => normPlate(i.plate)));
+    // Unassigned meetings keep the stricter ≥5min bar (a genuine off-plan stop).
     const unassigned = visits
-      .filter((v) => !assignedPlates.has(normPlate(v.plate || v.name)))
+      .filter((v) => !assignedPlates.has(normPlate(v.plate || v.name)) && v.minutes >= 5)
       .map((v) => ({ name: v.name, plate: v.plate || null, minutes: v.minutes, stops: v.stops, lat: v.lat, lng: v.lng }))
       .sort((x, y) => y.minutes - x.minutes);
     return {

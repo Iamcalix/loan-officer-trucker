@@ -128,6 +128,16 @@ function render(j) {
       }
       html += `</table>`;
     }
+    const between = o.between || [];
+    if (between.length) {
+      const total = between.reduce((s, b) => s + b.minutes, 0);
+      html += `<h3>Time between customers — ${dur(total)} travelling</h3>
+        <table><tr><th>From</th><th>To</th><th>Left</th><th>Arrived</th><th>Travel</th></tr>`;
+      for (const b of between) {
+        html += `<tr><td>${b.from}</td><td>${b.to}</td><td class="muted">${hm(b.leftAt)}</td><td class="muted">${hm(b.reachedAt)}</td><td><b>${dur(b.minutes)}</b></td></tr>`;
+      }
+      html += `</table>`;
+    }
     if (uStops.length) {
       html += `<h3>Off-plan stops (not the office or an assigned customer) — ${uStops.length}</h3>
         <table><tr><th>From</th><th>To</th><th>Duration</th><th>Where</th></tr>`;

@@ -72,12 +72,27 @@ export async function buildReport(gps, date = eatToday(), assignmentsByOfficer =
       .filter((v) => !assignedPlates.has(normPlate(v.plate || v.name)) && v.minutes >= 5)
       .map((v) => ({ name: v.name, plate: v.plate || null, minutes: v.minutes, stops: v.stops, lat: v.lat, lng: v.lng }))
       .sort((x, y) => y.minutes - x.minutes);
+
+    // Travel time BETWEEN customers: order every customer stop chronologically and
+    // measure the gap from leaving one to reaching the next.
+    const events = [];
+    if (assigned) for (const it of assigned.items) if (it.visited) for (const s of it.stops) events.push({ name: it.name, start: s.start, end: s.end });
+    for (const u of unassigned) for (const s of u.stops) events.push({ name: u.name, start: s.start, end: s.end });
+    events.sort((x, y) => x.start - y.start);
+    const between = [];
+    for (let i = 1; i < events.length; i++) {
+      const gap = events[i].start - events[i - 1].end;
+      if (gap >= 60 && events[i - 1].name !== events[i].name) {
+        between.push({ from: events[i - 1].name, to: events[i].name, leftAt: events[i - 1].end, reachedAt: events[i].start, minutes: Math.round(gap / 60) });
+      }
+    }
     return {
       imei,
       name: o?.name || imei,
       area: o?.area || null,
       assigned,
       unassigned,
+      between,
       // "Started" = reached the first assigned customer, else first activity of the day.
       startedTs: firstCustomerTs ?? ex.workStart ?? null,
       firstCustomerTs,
@@ -144,6 +159,16 @@ function officerBlock(o) {
       const where = Number.isFinite(u.lat) ? `<a href="https://www.google.com/maps?q=${u.lat},${u.lng}" target="_blank">map</a>` : '—';
       h += `<tr><td>${esc(u.name)}</td><td><b>${dur(u.minutes)}</b></td>
         <td class="muted">${u.stops.map((s) => hm(s.start) + '–' + hm(s.end)).join(', ')}</td><td>${where}</td></tr>`;
+    }
+    h += `</table>`;
+  }
+
+  if (o.between && o.between.length) {
+    const total = o.between.reduce((s, b) => s + b.minutes, 0);
+    h += `<h3>Time between customers — ${dur(total)} travelling</h3>
+      <table><tr><th>From</th><th>To</th><th>Left</th><th>Arrived</th><th>Travel</th></tr>`;
+    for (const b of o.between) {
+      h += `<tr><td>${esc(b.from)}</td><td>${esc(b.to)}</td><td class="muted">${hm(b.leftAt)}</td><td class="muted">${hm(b.reachedAt)}</td><td><b>${dur(b.minutes)}</b></td></tr>`;
     }
     h += `</table>`;
   }

@@ -38,6 +38,7 @@ function assignedSummary(items, visits) {
       name: it.name, plate: it.plate || null, matched: Boolean(it.matched),
       visited: Boolean(hit), minutes: hit ? hit.minutes : 0, stops: hit ? hit.stops : [],
       lat: hit ? hit.lat : null, lng: hit ? hit.lng : null,
+      enteredName: it.enteredName, comment: it.comment || '',
     };
   });
   return {
@@ -139,15 +140,15 @@ function officerBlock(o) {
       <div class="stat"><div class="n">${notVisited.length}</div><div class="l">not visited</div></div>
       <div class="stat"><div class="n">${o.unknownStops.length}</div><div class="l">off-plan stops</div></div>
     </div>`;
-    h += `<table><tr><th>Customer</th><th>Status</th><th>Time with them</th><th>When</th><th>Where</th></tr>`;
+    h += `<table><tr><th>Customer</th><th>Status</th><th>Time with them</th><th>When</th><th>Where</th><th>Note</th></tr>`;
     for (const i of visited) {
       const where = Number.isFinite(i.lat) ? `<a href="https://www.google.com/maps?q=${i.lat},${i.lng}" target="_blank">map</a>` : '—';
       h += `<tr><td>${esc(i.name)}</td><td><span class="tag t-customer">Visited</span></td>
-        <td><b>${dur(i.minutes)}</b></td><td class="muted">${i.stops.map((s) => hm(s.start) + '–' + hm(s.end)).join(', ')}</td><td>${where}</td></tr>`;
+        <td><b>${dur(i.minutes)}</b></td><td class="muted">${i.stops.map((s) => hm(s.start) + '–' + hm(s.end)).join(', ')}</td><td>${where}</td><td>${esc(i.comment)}</td></tr>`;
     }
     for (const i of notVisited) {
       h += `<tr><td>${esc(i.name)}${i.matched ? '' : ' <span class="muted">(unmatched)</span>'}</td>
-        <td><span class="tag t-unknown">Not visited</span></td><td class="muted">—</td><td></td><td class="muted">—</td></tr>`;
+        <td><span class="tag t-unknown">Not visited</span></td><td class="muted">—</td><td></td><td class="muted">—</td><td>${esc(i.comment)}</td></tr>`;
     }
     h += `</table>`;
   } else {

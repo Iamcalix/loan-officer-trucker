@@ -36,6 +36,9 @@
     .officer { break-inside:avoid; border:1px solid #ccc; }
     .stat, .tag { border:1px solid #ccc; }
   }
+  input.cmt { width:100%; min-width:120px; background:var(--bg); color:var(--txt); border:1px solid var(--line); border-radius:5px; padding:4px 6px; font-size:12px; font-family:inherit; }
+  input.cmt.saving { opacity:.5; } input.cmt.saved { border-color:#22c55e; }
+  @media print { input.cmt { border:none; background:transparent; padding:0; } }
 </style>
 </head>
 <body>
@@ -64,6 +67,24 @@ function dur(min) {
   return (h ? h + 'h ' : '') + m + 'm';
 }
 function eatToday() { return new Date(Date.now() + 3 * 3600e3).toISOString().slice(0, 10); }
+const attr = (s) => String(s || '').replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
+let reportDay = null; // the date currently shown (for saving comments)
+
+// An editable note cell for one assigned customer (saves on blur).
+function noteCell(officerImei, i) {
+  return `<td><input class="cmt" data-o="${attr(officerImei)}" data-n="${attr(i.enteredName)}" value="${attr(i.comment)}" placeholder="add note…" /></td>`;
+}
+async function saveComment(inp) {
+  inp.classList.add('saving');
+  try {
+    await fetch('/api/assignments/comment', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ day: reportDay, officerImei: inp.dataset.o, enteredName: inp.dataset.n, comment: inp.value }),
+    });
+    inp.classList.remove('saving'); inp.classList.add('saved');
+    setTimeout(() => inp.classList.remove('saved'), 1200);
+  } catch { inp.classList.remove('saving'); }
+}
 
 async function load() {
   const date = $('date').value || eatToday();
@@ -80,6 +101,7 @@ async function load() {
 }
 
 function render(j) {
+  reportDay = j.date;
   const withList = j.officers.filter((o) => o.assigned);
   const totVisited = withList.reduce((s, o) => s + o.assigned.visited, 0);
   const totAssigned = withList.reduce((s, o) => s + o.assigned.total, 0);
@@ -103,15 +125,15 @@ function render(j) {
           <div class="stat"><div class="n">${notVisited.length}</div><div class="l">not visited</div></div>
           <div class="stat"><div class="n">${uStops.length}</div><div class="l">off-plan stops</div></div>
         </div>`;
-      html += `<table><tr><th>Customer</th><th>Status</th><th>Time with them</th><th>When</th><th>Where</th></tr>`;
+      html += `<table><tr><th>Customer</th><th>Status</th><th>Time with them</th><th>When</th><th>Where</th><th>Note</th></tr>`;
       for (const i of visited) {
         const where = isFinite(i.lat) ? `<a href="https://www.google.com/maps?q=${i.lat},${i.lng}" target="_blank">map</a>` : '—';
         html += `<tr><td>${i.name}</td><td><span class="tag t-customer">Visited</span></td>
-          <td><b>${dur(i.minutes)}</b></td><td class="muted">${i.stops.map((s) => hm(s.start) + '–' + hm(s.end)).join(', ')}</td><td>${where}</td></tr>`;
+          <td><b>${dur(i.minutes)}</b></td><td class="muted">${i.stops.map((s) => hm(s.start) + '–' + hm(s.end)).join(', ')}</td><td>${where}</td>${noteCell(o.imei, i)}</tr>`;
       }
       for (const i of notVisited) {
         html += `<tr><td>${i.name}${i.matched ? '' : ' <span class="muted">(unmatched)</span>'}</td>
-          <td><span class="tag t-unknown">Not visited</span></td><td class="muted">—</td><td></td><td class="muted">—</td></tr>`;
+          <td><span class="tag t-unknown">Not visited</span></td><td class="muted">—</td><td></td><td class="muted">—</td>${noteCell(o.imei, i)}</tr>`;
       }
       html += `</table>`;
     } else {
@@ -150,6 +172,11 @@ function render(j) {
     html += `</div>`;
   }
   $('wrap').innerHTML = html;
+  $('wrap').querySelectorAll('input.cmt').forEach((inp) => {
+    let orig = inp.value;
+    inp.onblur = () => { if (inp.value !== orig) { orig = inp.value; saveComment(inp); } };
+    inp.onkeydown = (e) => { if (e.key === 'Enter') inp.blur(); };
+  });
 }
 
 $('date').value = eatToday();

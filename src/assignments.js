@@ -5,7 +5,7 @@
 //
 // Table: assignments(id, day, officer_imei, entered_name, plate, matched, created_at)
 
-import { supabaseEnabled, sbSelect, sbInsert, sbDelete } from './supa.js';
+import { supabaseEnabled, sb, sbSelect, sbInsert, sbDelete } from './supa.js';
 import { bestMatch, customerByPlate } from './register.js';
 
 // Resolve a list of pasted names for one officer, REPLACING that officer's list
@@ -43,10 +43,11 @@ export async function setAssignmentPlate(day, officerImei, enteredName, plate) {
   return { ok: true };
 }
 
-// All assignments for a day → [{ officerImei, enteredName, plate, matched, name, phone }].
+// All assignments for a day → [{ officerImei, enteredName, plate, matched, name, phone, comment }].
+// select=* so a missing `comment` column (before its ALTER) degrades gracefully.
 export async function getAssignments(day) {
   if (!supabaseEnabled()) return [];
-  const rows = await sbSelect(`assignments?day=eq.${day}&select=officer_imei,entered_name,plate,matched`);
+  const rows = await sbSelect(`assignments?day=eq.${day}&select=*`);
   return rows.map((r) => {
     const cust = r.plate ? customerByPlate(r.plate) : null;
     return {
@@ -56,8 +57,20 @@ export async function getAssignments(day) {
       matched: Boolean(r.matched),
       name: cust?.name || r.entered_name,
       phone: cust?.phone || '',
+      comment: r.comment || '',
     };
   });
+}
+
+// Save/clear a free-text comment on one assigned customer for the day.
+export async function setComment(day, officerImei, enteredName, comment) {
+  if (!supabaseEnabled()) return { ok: false };
+  await sb(`assignments?day=eq.${day}&officer_imei=eq.${encodeURIComponent(officerImei)}&entered_name=eq.${encodeURIComponent(enteredName)}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', Prefer: 'return=minimal' },
+    body: JSON.stringify({ comment: String(comment || '').slice(0, 500) }),
+  });
+  return { ok: true };
 }
 
 // day → Map(plate → [officerImei,...]) for map highlighting.

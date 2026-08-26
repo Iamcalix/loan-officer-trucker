@@ -10,7 +10,7 @@ import { config, assertConfigured } from './config.js';
 import { createFleetClient } from './fleet.js';
 import { officerFor, officerImeis, hasRoster, saveRoster, initRoster } from './officers.js';
 import { loadRegister, matchCandidates, registerSize, customerByPlate } from './register.js';
-import { saveAssignments, setAssignmentPlate, getAssignments, assignedPlatesForDay } from './assignments.js';
+import { saveAssignments, setAssignmentPlate, setComment, getAssignments, assignedPlatesForDay } from './assignments.js';
 import { sampleFromRows, getVisits, getExtras } from './visitlog.js';
 import { officePlace, haversineM } from './places.js';
 import { analyzeTrack } from './visits.js';
@@ -356,6 +356,17 @@ const server = http.createServer(async (req, res) => {
     if (p === '/api/register/reload' && req.method === 'POST') {
       const list = await loadRegister();
       return sendJson(res, 200, { ok: true, size: list.length });
+    }
+
+    // Save a per-customer note: { day?, officerImei, enteredName, comment }.
+    if (p === '/api/assignments/comment' && req.method === 'POST') {
+      const body = await readBody(req);
+      let payload; try { payload = JSON.parse(body || '{}'); } catch { return sendJson(res, 400, { error: 'invalid JSON' }); }
+      const day = payload.day || eatToday();
+      const officerImei = String(payload.officerImei || '');
+      if (!/^\d{6,}$/.test(officerImei) || !payload.enteredName) return sendJson(res, 400, { error: 'officerImei + enteredName required' });
+      await setComment(day, officerImei, String(payload.enteredName), payload.comment || '');
+      return sendJson(res, 200, { ok: true });
     }
 
     // Import an officer's daily follow-list: { officerImei, names:[...], day? }.

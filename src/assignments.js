@@ -8,6 +8,16 @@
 import { supabaseEnabled, sb, sbSelect, sbInsert, sbDelete } from './supa.js';
 import { bestMatch, customerByPlate } from './register.js';
 
+// Pasted follow-lists often carry extra columns (name<TAB>amount<TAB>officer) or a
+// trailing amount ("SAIDI ATHUMANI ALLY 59,000.00"). Keep just the name so matching
+// isn't polluted by numbers/other fields.
+export function cleanImportedName(raw) {
+  let s = String(raw || '').trim();
+  if (s.includes('\t')) s = s.split('\t')[0];       // keep the first (name) column
+  s = s.replace(/[\s,;|-]+[\d][\d.,]*\s*$/, '');     // drop a trailing amount like "59,000.00"
+  return s.trim();
+}
+
 // Resolve a list of pasted names for one officer, REPLACING that officer's list
 // for the day. Returns the resolution so the UI can show matched vs unmatched.
 export async function saveAssignments(day, officerImei, names) {
@@ -16,7 +26,7 @@ export async function saveAssignments(day, officerImei, names) {
   const matched = [];
   const unmatched = [];
   for (const raw of names) {
-    const entered = String(raw || '').trim();
+    const entered = cleanImportedName(raw);
     if (!entered) continue;
     const dedupKey = entered.toUpperCase();
     if (seen.has(dedupKey)) continue;

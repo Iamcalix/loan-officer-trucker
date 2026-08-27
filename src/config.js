@@ -77,6 +77,10 @@ export const config = {
     stopMinMinutes: num(process.env.STOP_MIN_MINUTES, 5),
     // Fixes at/below this speed (km/h) are considered stationary.
     stopSpeedKmh: num(process.env.STOP_SPEED_KMH, 4),
+    // "Stopped to talk": a meeting only counts when BOTH the officer's and the
+    // customer's bike are essentially STOPPED (≤ this km/h — trackers report 0 when
+    // parked, so a small value tolerates GPS jitter while excluding creeping/passing).
+    meetSpeedKmh: num(process.env.MEET_SPEED_KMH, 2),
     // A live fix at/below this speed marks the officer "stopped" (vs "moving").
     movingSpeedKmh: num(process.env.MOVING_SPEED_KMH, 6),
   },

@@ -148,7 +148,10 @@ export function create18gpsClient() {
     async liveLocations() {
       const map = await this._loadBatch();
       return [...map.values()]
-        .map((o) => ({ imei: String(o.sim_id || '').trim(), lat: Number(o.weidu), lng: Number(o.jingdu) }))
+        .map((o) => ({
+          imei: String(o.sim_id || '').trim(), lat: Number(o.weidu), lng: Number(o.jingdu),
+          speed: Number.isFinite(Number(o.su)) ? Number(o.su) : null,
+        }))
         .filter((o) => o.imei && Number.isFinite(o.lat) && Number.isFinite(o.lng) && (o.lat !== 0 || o.lng !== 0));
     },
 

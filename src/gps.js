@@ -126,7 +126,10 @@ export function createGpsClient() {
       const res = await call(`/api/device/locations/search-by-organization?${parts.join('&')}`);
       const rows = res.json?.data || [];
       return rows
-        .map((o) => ({ imei: String(o.imei || '').trim(), lat: Number(o.lat), lng: Number(o.lng) }))
+        .map((o) => ({
+          imei: String(o.imei || '').trim(), lat: Number(o.lat), lng: Number(o.lng),
+          speed: Number.isFinite(Number(o.speed)) ? Number(o.speed) : null,
+        }))
         .filter((o) => o.imei && Number.isFinite(o.lat) && Number.isFinite(o.lng));
     },
 

@@ -96,11 +96,11 @@ function placeFor(officerPos, customerBikes, assignedSet) {
   for (const c of customerBikes) {
     const d = haversineM(officerPos, c);
     if (d > R) continue;
-    if (assignedSet.has(c.plate)) { if (!bestA || d < bestA.d) bestA = { d, plate: c.plate, name: c.name }; }
-    else if (!bestU || d < bestU.d) bestU = { d, plate: c.plate, name: c.name };
+    if (assignedSet.has(c.plate)) { if (!bestA || d < bestA.d) bestA = { d, plate: c.plate, name: c.name, speed: c.speed }; }
+    else if (!bestU || d < bestU.d) bestU = { d, plate: c.plate, name: c.name, speed: c.speed };
   }
   const pick = bestA || bestU; // assigned customers take priority over unassigned
-  if (pick) return { type: 'customer', plate: pick.plate, name: pick.name, assigned: Boolean(bestA), distM: Math.round(pick.d) };
+  if (pick) return { type: 'customer', plate: pick.plate, name: pick.name, assigned: Boolean(bestA), distM: Math.round(pick.d), custSpeed: pick.speed };
   return null;
 }
 
@@ -126,7 +126,7 @@ async function buildSnapshot() {
   const customerBikes = restrict
     ? locs.filter((l) => !roster.has(l.imei)).map((l) => {
         const plate = normPlate(names.get(l.imei) || '');
-        return plate ? { lat: l.lat, lng: l.lng, plate, name: customerByPlate(plate)?.name || names.get(l.imei) || l.imei } : null;
+        return plate ? { lat: l.lat, lng: l.lng, speed: l.speed ?? null, plate, name: customerByPlate(plate)?.name || names.get(l.imei) || l.imei } : null;
       }).filter(Boolean)
     : [];
 
@@ -153,7 +153,7 @@ async function buildSnapshot() {
       area: o?.area || null,
       lat: l.lat,
       lng: l.lng,
-      place: place ? { type: place.type, name: place.name, plate: place.plate || null, assigned: place.assigned !== false, distM: place.distM } : null,
+      place: place ? { type: place.type, name: place.name, plate: place.plate || null, assigned: place.assigned !== false, distM: place.distM, custSpeed: place.custSpeed ?? null } : null,
       status: liveLabel(place, st),
       online: st ? st.online : null,
       speedKmh: st ? st.speedKmh : null,

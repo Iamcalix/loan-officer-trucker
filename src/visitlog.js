@@ -58,11 +58,12 @@ const OFFICE_PLATE = 'OFFICE';
 // OFF-PLAN ("unknown") stop.
 export async function record(officerImei, place, nowSec, speedKmh, lat, lng) {
   const stationary = speedKmh == null ? true : speedKmh <= config.proximity.stopSpeedKmh;
-  // "Stopped to talk": the officer is essentially STOPPED (≈0), and so is the
-  // customer's bike — they both pulled over to talk, not just passing/parked-nearby.
+  // "Stopped to talk": the officer's bike is essentially STOPPED (≈0). The customer
+  // side is lenient — we only rule out a customer who is clearly RIDING BY (moving
+  // fast), so GPS jitter on a parked bike never drops a real meeting.
   const meet = config.proximity.meetSpeedKmh;
   const officerStopped = speedKmh == null ? true : speedKmh <= meet;
-  const custStopped = place?.custSpeed == null ? true : place.custSpeed <= meet;
+  const custStopped = place?.custSpeed == null ? true : place.custSpeed <= config.proximity.movingSpeedKmh;
   const hasPos = Number.isFinite(lat) && Number.isFinite(lng);
 
   let target = null; // { plate, name }

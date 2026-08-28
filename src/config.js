@@ -71,6 +71,11 @@ export const config = {
   proximity: {
     // How close (metres) an officer must be to a customer to count as "with" them.
     customerRadiusM: num(process.env.CUSTOMER_RADIUS_M, 150),
+    // UNASSIGNED (off-list) meetings are sensitive — flagging one wrongly is unfair.
+    // Require MUCH tighter proximity and a longer stay so only a genuine, sat-down
+    // meeting is reported (an assigned customer stays lenient).
+    unassignedRadiusM: num(process.env.UNASSIGNED_RADIUS_M, 60),
+    unassignedMinMinutes: num(process.env.UNASSIGNED_MIN_MINUTES, 10),
     // A "stop" is a run of fixes that stays inside this radius (metres)…
     stopRadiusM: num(process.env.STOP_RADIUS_M, 80),
     // …for at least this long (minutes). Shorter clusters are treated as passing through.

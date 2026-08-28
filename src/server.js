@@ -91,13 +91,13 @@ function placeFor(officerPos, customerBikes, assignedSet) {
     const d = haversineM(officerPos, office);
     if (d <= office.radiusM) return { type: 'office', name: office.name, distM: Math.round(d) };
   }
-  const R = config.proximity.customerRadiusM;
+  const R = config.proximity.customerRadiusM;              // assigned: lenient
+  const Ru = config.proximity.unassignedRadiusM;           // unassigned: tight (sensitive)
   let bestA = null, bestU = null;
   for (const c of customerBikes) {
     const d = haversineM(officerPos, c);
-    if (d > R) continue;
-    if (assignedSet.has(c.plate)) { if (!bestA || d < bestA.d) bestA = { d, plate: c.plate, name: c.name, speed: c.speed }; }
-    else if (!bestU || d < bestU.d) bestU = { d, plate: c.plate, name: c.name, speed: c.speed };
+    if (assignedSet.has(c.plate)) { if (d <= R && (!bestA || d < bestA.d)) bestA = { d, plate: c.plate, name: c.name, speed: c.speed }; }
+    else if (d <= Ru && (!bestU || d < bestU.d)) bestU = { d, plate: c.plate, name: c.name, speed: c.speed };
   }
   const pick = bestA || bestU; // assigned customers take priority over unassigned
   if (pick) return { type: 'customer', plate: pick.plate, name: pick.name, assigned: Boolean(bestA), distM: Math.round(pick.d), custSpeed: pick.speed };
@@ -169,8 +169,9 @@ async function buildSnapshot() {
   const met = await metTodayMap().catch(() => new Map());
   for (const s of snapshot) {
     const aset = assignedByOff.get(s.imei) || new Set();
-    // Count an assigned customer on any real stop; an unassigned one only at ≥5min.
-    const counted = (met.get(s.imei) || []).filter((v) => aset.has(normPlate(v.plate || v.name)) || v.minutes >= 5);
+    // Count an assigned customer on any real stop; an unassigned one only when it
+    // clears the high-confidence bar (long stay).
+    const counted = (met.get(s.imei) || []).filter((v) => aset.has(normPlate(v.plate || v.name)) || v.minutes >= config.proximity.unassignedMinMinutes);
     s.metToday = counted.length;
     s.withCustomersMinToday = counted.reduce((sum, x) => sum + x.minutes, 0);
   }

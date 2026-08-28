@@ -74,7 +74,7 @@ export const config = {
     // UNASSIGNED (off-list) meetings are sensitive — flagging one wrongly is unfair.
     // Require MUCH tighter proximity and a longer stay so only a genuine, sat-down
     // meeting is reported (an assigned customer stays lenient).
-    unassignedRadiusM: num(process.env.UNASSIGNED_RADIUS_M, 60),
+    unassignedRadiusM: num(process.env.UNASSIGNED_RADIUS_M, 10),
     unassignedMinMinutes: num(process.env.UNASSIGNED_MIN_MINUTES, 10),
     // A "stop" is a run of fixes that stays inside this radius (metres)…
     stopRadiusM: num(process.env.STOP_RADIUS_M, 80),

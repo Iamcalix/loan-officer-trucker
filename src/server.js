@@ -86,11 +86,6 @@ async function assignedPlatesByOfficer(day) {
 // preferring one of THEIR assigned customers, else flagging it as unassigned.
 // (Office wins first and is never reported as a "meeting".)
 function placeFor(officerPos, customerBikes, assignedSet) {
-  const office = officePlace();
-  if (office) {
-    const d = haversineM(officerPos, office);
-    if (d <= office.radiusM) return { type: 'office', name: office.name, distM: Math.round(d) };
-  }
   const R = config.proximity.customerRadiusM;              // assigned: lenient
   const Ru = config.proximity.unassignedRadiusM;           // unassigned: tight (sensitive)
   let bestA = null, bestU = null;
@@ -99,8 +94,17 @@ function placeFor(officerPos, customerBikes, assignedSet) {
     if (assignedSet.has(c.plate)) { if (d <= R && (!bestA || d < bestA.d)) bestA = { d, plate: c.plate, name: c.name, speed: c.speed }; }
     else if (d <= Ru && (!bestU || d < bestU.d)) bestU = { d, plate: c.plate, name: c.name, speed: c.speed };
   }
-  const pick = bestA || bestU; // assigned customers take priority over unassigned
-  if (pick) return { type: 'customer', plate: pick.plate, name: pick.name, assigned: Boolean(bestA), distM: Math.round(pick.d), custSpeed: pick.speed };
+  // An ASSIGNED customer is counted even at the office — a customer who comes to the
+  // office to meet their officer is still a visit.
+  if (bestA) return { type: 'customer', plate: bestA.plate, name: bestA.name, assigned: true, distM: Math.round(bestA.d), custSpeed: bestA.speed };
+  // Otherwise the office takes precedence, and an UNASSIGNED customer is NEVER
+  // reported at the office (only out in the field).
+  const office = officePlace();
+  if (office) {
+    const d = haversineM(officerPos, office);
+    if (d <= office.radiusM) return { type: 'office', name: office.name, distM: Math.round(d) };
+  }
+  if (bestU) return { type: 'customer', plate: bestU.plate, name: bestU.name, assigned: false, distM: Math.round(bestU.d), custSpeed: bestU.speed };
   return null;
 }
 

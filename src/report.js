@@ -7,6 +7,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { config } from './config.js';
 import { officerFor, officerImeis } from './officers.js';
+import { haversineM } from './places.js';
 
 // Today's date (YYYY-MM-DD) in East Africa Time (UTC+3), independent of server TZ.
 export function eatToday() {
@@ -72,8 +73,14 @@ export async function buildReport(gps, date = eatToday(), assignmentsByOfficer =
     const assignedPlates = new Set(items.filter((i) => i.plate).map((i) => normPlate(i.plate)));
     // Unassigned meetings are sensitive → only report high-confidence ones: a long,
     // genuine stay (the tight proximity is already enforced at detection time).
+    // SAFETY NET: if the officer was visiting an ASSIGNED customer at that same spot,
+    // a bystander bike nearby is NOT an off-list meeting — drop it.
+    const assignedLocs = assigned
+      ? assigned.items.filter((i) => i.visited && Number.isFinite(i.lat)).map((i) => ({ lat: i.lat, lng: i.lng }))
+      : [];
     const unassigned = visits
       .filter((v) => !assignedPlates.has(normPlate(v.plate || v.name)) && v.minutes >= config.proximity.unassignedMinMinutes)
+      .filter((v) => !(Number.isFinite(v.lat) && assignedLocs.some((a) => haversineM(a, v) <= config.proximity.customerRadiusM)))
       .map((v) => ({ name: v.name, plate: v.plate || null, minutes: v.minutes, stops: v.stops, lat: v.lat, lng: v.lng }))
       .sort((x, y) => y.minutes - x.minutes);
 

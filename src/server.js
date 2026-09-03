@@ -214,11 +214,21 @@ async function makeReport(date) {
     if (!byOfficer.has(r.officerImei)) byOfficer.set(r.officerImei, []);
     byOfficer.get(r.officerImei).push(r);
   }
-  const [visitsByOfficer, extrasByOfficer] = await Promise.all([
+  const [visitsByOfficer, extrasByOfficer, locs, names] = await Promise.all([
     getVisits(date).catch(() => new Map()),
     getExtras(date).catch(() => new Map()),
+    getLiveLocations().catch(() => []),
+    getDeviceNames().catch(() => new Map()),
   ]);
-  return buildReport(gps, date, byOfficer, visitsByOfficer, extrasByOfficer);
+  // Plates whose bike is currently reporting GPS (fresh fix). A not-visited assigned
+  // customer whose bike is NOT here = "GPS offline" (can't verify) vs a real miss.
+  const maxAge = config.offlineAfterMin * 60;
+  const onlinePlates = new Set();
+  for (const l of locs) {
+    const plate = normPlate(names.get(l.imei) || '');
+    if (plate && (l.ageSec == null || l.ageSec <= maxAge)) onlinePlates.add(plate);
+  }
+  return buildReport(gps, date, byOfficer, visitsByOfficer, extrasByOfficer, onlinePlates);
 }
 
 // -------------------------------- routing ------------------------------------

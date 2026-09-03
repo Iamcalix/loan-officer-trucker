@@ -125,11 +125,16 @@ export function createGpsClient() {
       if (config.wanway.accountId) parts.push(`accountId=${encodeURIComponent(config.wanway.accountId)}`);
       const res = await call(`/api/device/locations/search-by-organization?${parts.join('&')}`);
       const rows = res.json?.data || [];
+      const now = Math.floor(Date.now() / 1000);
       return rows
-        .map((o) => ({
-          imei: String(o.imei || '').trim(), lat: Number(o.lat), lng: Number(o.lng),
-          speed: Number.isFinite(Number(o.speed)) ? Number(o.speed) : null,
-        }))
+        .map((o) => {
+          const gs = Number(o.gpsTime); // Wanway gpsTime is unix seconds
+          return {
+            imei: String(o.imei || '').trim(), lat: Number(o.lat), lng: Number(o.lng),
+            speed: Number.isFinite(Number(o.speed)) ? Number(o.speed) : null,
+            ageSec: Number.isFinite(gs) && gs > 0 ? Math.max(0, now - gs) : null,
+          };
+        })
         .filter((o) => o.imei && Number.isFinite(o.lat) && Number.isFinite(o.lng));
     },
 

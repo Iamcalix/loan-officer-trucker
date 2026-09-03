@@ -25,7 +25,7 @@
   th, td { text-align:left; padding:6px 8px; border-bottom:1px solid var(--line); }
   th { color:var(--mut); font-weight:600; font-size:11px; text-transform:uppercase; letter-spacing:.03em; }
   .tag { display:inline-block; font-size:11px; padding:1px 7px; border-radius:10px; }
-  .t-office { background:#1e3a8a; color:#bfdbfe; } .t-customer { background:#14532d; color:#bbf7d0; } .t-unknown { background:#7c2d12; color:#fed7aa; }
+  .t-office { background:#1e3a8a; color:#bfdbfe; } .t-customer { background:#14532d; color:#bbf7d0; } .t-unknown { background:#7c2d12; color:#fed7aa; } .t-offline { background:#334155; color:#cbd5e1; }
   .muted { color:var(--mut); }
   h3 { font-size:13px; margin:14px 0 4px; }
   a { color:#93c5fd; }
@@ -118,11 +118,13 @@ function render(j) {
       <div class="sub">${shift}</div>`;
     if (a) {
       const visited = a.items.filter((i) => i.visited).sort((x, y) => y.minutes - x.minutes);
-      const notVisited = a.items.filter((i) => !i.visited);
+      const offline = a.items.filter((i) => !i.visited && i.gpsOffline);
+      const notVisited = a.items.filter((i) => !i.visited && !i.gpsOffline);
       html += `<div class="stats">
           <div class="stat"><div class="n">${a.visited}/${a.total}</div><div class="l">visited</div></div>
           <div class="stat"><div class="n">${dur(a.minutes)}</div><div class="l">total time with them</div></div>
           <div class="stat"><div class="n">${notVisited.length}</div><div class="l">not visited</div></div>
+          <div class="stat"><div class="n">${offline.length}</div><div class="l">bike GPS offline</div></div>
           <div class="stat"><div class="n">${uStops.length}</div><div class="l">off-plan stops</div></div>
         </div>`;
       html += `<table><tr><th>Customer</th><th>Status</th><th>Time with them</th><th>When</th><th>Where</th><th>Note</th></tr>`;
@@ -134,6 +136,10 @@ function render(j) {
       for (const i of notVisited) {
         html += `<tr><td>${i.name}${i.matched ? '' : ' <span class="muted">(unmatched)</span>'}</td>
           <td><span class="tag t-unknown">Not visited</span></td><td class="muted">—</td><td></td><td class="muted">—</td>${noteCell(o.imei, i)}</tr>`;
+      }
+      for (const i of offline) {
+        html += `<tr><td>${i.name}${i.matched ? '' : ' <span class="muted">(unmatched)</span>'}</td>
+          <td><span class="tag t-offline">Bike GPS offline</span></td><td class="muted">can't verify</td><td></td><td class="muted">—</td>${noteCell(o.imei, i)}</tr>`;
       }
       html += `</table>`;
     } else {

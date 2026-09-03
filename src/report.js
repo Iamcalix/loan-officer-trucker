@@ -23,7 +23,7 @@ const normPlate = (s) => String(s || '').toUpperCase().replace(/[^A-Z0-9]/g, '')
 
 // Cross-reference an agent's assigned follow-list against the customers they were
 // actually logged with → visited (with duration) vs. not visited.
-function assignedSummary(items, visits) {
+function assignedSummary(items, visits, onlinePlates) {
   const byPlate = new Map();
   for (const v of visits) {
     const p = normPlate(v.plate || v.name);
@@ -34,10 +34,14 @@ function assignedSummary(items, visits) {
     byPlate.set(p, cur);
   }
   const list = items.map((it) => {
-    const hit = it.matched && it.plate ? byPlate.get(normPlate(it.plate)) : null;
+    const p = normPlate(it.plate || it.name);
+    const hit = it.matched && it.plate ? byPlate.get(p) : null;
+    const visited = Boolean(hit);
+    // Not GPS-visited AND the customer's bike isn't reporting → can't verify (not a miss).
+    const gpsOffline = !visited && onlinePlates ? !onlinePlates.has(p) : false;
     return {
       name: it.name, plate: it.plate || null, matched: Boolean(it.matched),
-      visited: Boolean(hit), minutes: hit ? hit.minutes : 0, stops: hit ? hit.stops : [],
+      visited, gpsOffline, minutes: hit ? hit.minutes : 0, stops: hit ? hit.stops : [],
       lat: hit ? hit.lat : null, lng: hit ? hit.lng : null,
       enteredName: it.enteredName, comment: it.comment || '',
     };
@@ -46,6 +50,7 @@ function assignedSummary(items, visits) {
     total: items.length,
     matched: items.filter((i) => i.matched).length,
     visited: list.filter((l) => l.visited).length,
+    gpsOffline: list.filter((l) => l.gpsOffline).length,
     minutes: list.reduce((s, l) => s + l.minutes, 0),
     items: list,
   };
@@ -54,13 +59,13 @@ function assignedSummary(items, visits) {
 // Build the per-agent follow-list report for a date. `assignmentsByOfficer` maps
 // officerImei -> assignment items; `visitsByOfficer` maps officerImei -> logged
 // visits. (gps is unused now — kept for a stable call signature.)
-export async function buildReport(gps, date = eatToday(), assignmentsByOfficer = new Map(), visitsByOfficer = new Map(), extrasByOfficer = new Map()) {
+export async function buildReport(gps, date = eatToday(), assignmentsByOfficer = new Map(), visitsByOfficer = new Map(), extrasByOfficer = new Map(), onlinePlates = null) {
   const officers = [...officerImeis()].map((imei) => {
     const o = officerFor(imei);
     const items = assignmentsByOfficer.get(imei) || [];
     const visits = visitsByOfficer.get(imei) || [];
     const ex = extrasByOfficer.get(imei) || {};
-    const assigned = items.length ? assignedSummary(items, visits) : null;
+    const assigned = items.length ? assignedSummary(items, visits, onlinePlates) : null;
     // First ASSIGNED customer reached today (consistent with the visited count).
     let firstCustomerTs = null;
     if (assigned) {
@@ -141,11 +146,13 @@ function officerBlock(o) {
 
   if (a) {
     const visited = a.items.filter((i) => i.visited).sort((x, y) => y.minutes - x.minutes);
-    const notVisited = a.items.filter((i) => !i.visited);
+    const offline = a.items.filter((i) => !i.visited && i.gpsOffline);
+    const notVisited = a.items.filter((i) => !i.visited && !i.gpsOffline);
     h += `<div class="stats">
       <div class="stat"><div class="n">${a.visited}/${a.total}</div><div class="l">visited</div></div>
       <div class="stat"><div class="n">${dur(a.minutes)}</div><div class="l">total time with them</div></div>
       <div class="stat"><div class="n">${notVisited.length}</div><div class="l">not visited</div></div>
+      <div class="stat"><div class="n">${offline.length}</div><div class="l">bike GPS offline</div></div>
       <div class="stat"><div class="n">${o.unknownStops.length}</div><div class="l">off-plan stops</div></div>
     </div>`;
     h += `<table><tr><th>Customer</th><th>Status</th><th>Time with them</th><th>When</th><th>Where</th><th>Note</th></tr>`;
@@ -157,6 +164,10 @@ function officerBlock(o) {
     for (const i of notVisited) {
       h += `<tr><td>${esc(i.name)}${i.matched ? '' : ' <span class="muted">(unmatched)</span>'}</td>
         <td><span class="tag t-unknown">Not visited</span></td><td class="muted">—</td><td></td><td class="muted">—</td><td>${esc(i.comment)}</td></tr>`;
+    }
+    for (const i of offline) {
+      h += `<tr><td>${esc(i.name)}${i.matched ? '' : ' <span class="muted">(unmatched)</span>'}</td>
+        <td><span class="tag t-offline">Bike GPS offline</span></td><td class="muted">can't verify</td><td></td><td class="muted">—</td><td>${esc(i.comment)}</td></tr>`;
     }
     h += `</table>`;
   } else {
@@ -219,7 +230,7 @@ export function renderReportHtml(report) {
   th,td{text-align:left;padding:6px 8px;border-bottom:1px solid #eee}
   th{color:#555;font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:.03em}
   .tag{display:inline-block;font-size:11px;padding:1px 7px;border-radius:10px}
-  .t-customer{background:#dcfce7;color:#14532d}.t-unknown{background:#ffedd5;color:#7c2d12}
+  .t-customer{background:#dcfce7;color:#14532d}.t-unknown{background:#ffedd5;color:#7c2d12}.t-offline{background:#e2e8f0;color:#334155}
   .muted{color:#777} a{color:#2563eb}
   .empty{color:#777;padding:40px;text-align:center}
 </style></head><body><div id="wrap">

@@ -39,8 +39,15 @@ export async function saveAssignments(day, officerImei, names) {
   }
 
   if (supabaseEnabled()) {
+    // GUARD: never let an empty submission wipe an existing list. A blank/failed
+    // paste (or a mis-click in the modal) would otherwise delete-then-insert-nothing
+    // and silently erase the officer's whole day. Saving requires at least one name;
+    // to genuinely clear a list, delete it explicitly.
+    if (!rows.length) {
+      return { day, officerImei, total: 0, matched, unmatched, skipped: 'empty — existing list left untouched' };
+    }
     await sbDelete(`assignments?day=eq.${day}&officer_imei=eq.${encodeURIComponent(officerImei)}`);
-    if (rows.length) await sbInsert('assignments', rows);
+    await sbInsert('assignments', rows);
   }
   return { day, officerImei, total: rows.length, matched, unmatched };
 }

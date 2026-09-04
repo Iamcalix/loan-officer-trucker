@@ -56,7 +56,18 @@ const OFFICE_PLATE = 'OFFICE';
 // officer is logged, either as WITH one of their assigned customers, or — if
 // stopped somewhere that is neither an assigned customer nor the office — as an
 // OFF-PLAN ("unknown") stop.
-export async function record(officerImei, place, nowSec, speedKmh, lat, lng) {
+export async function record(officerImei, place, nowSec, speedKmh, lat, lng, fixAgeSec) {
+  // GATE: only log a visit from a FRESH officer fix. A parked/stale tracker keeps
+  // echoing its last position on every refresh; without this, an officer whose bike
+  // sits all day near a customer's parked bike accrues a phantom all-day "visit" he
+  // never made (he never travelled there). If the officer's fix isn't recent we
+  // cannot assert where he is now — freeze and close any open session instead.
+  const officerFresh = fixAgeSec != null && fixAgeSec <= config.offlineAfterMin * 60;
+  if (!officerFresh) {
+    const c = open.get(officerImei);
+    if (c) { await persist(officerImei, c); open.delete(officerImei); }
+    return;
+  }
   const stationary = speedKmh == null ? true : speedKmh <= config.proximity.stopSpeedKmh;
   // "Stopped to talk": the officer's bike is essentially STOPPED (≈0). The customer
   // side is lenient — we only rule out a customer who is clearly RIDING BY (moving
@@ -102,8 +113,8 @@ export async function record(officerImei, place, nowSec, speedKmh, lat, lng) {
 export async function sampleFromRows(rows, nowSec) {
   for (const r of rows) {
     // r.place is the map snapshot's place ({type,name,distM}) or null; r.speedKmh
-    // gates out drive-bys.
-    await record(r.imei, r.place, nowSec, r.speedKmh, r.lat, r.lng).catch(() => {});
+    // gates out drive-bys; r.fixAgeSec gates out a stale/parked officer fix.
+    await record(r.imei, r.place, nowSec, r.speedKmh, r.lat, r.lng, r.fixAgeSec).catch(() => {});
   }
 }
 

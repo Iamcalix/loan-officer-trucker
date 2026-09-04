@@ -184,6 +184,10 @@ async function buildSnapshot() {
       online: st ? st.online : null,
       speedKmh: st ? st.speedKmh : null,
       ageSec: st ? st.ageSec : null,
+      // Age of the officer's own GPS fix — how the visit sampler knows the position
+      // is live, not a stale echo from a parked tracker. Live feed always carries it;
+      // fall back to the status call.
+      fixAgeSec: l.ageSec != null ? l.ageSec : (st ? st.ageSec : null),
       assignedCount: (assignedByOff.get(l.imei) || new Set()).size,
     };
   });

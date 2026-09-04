@@ -26,6 +26,18 @@ const gps = createFleetClient();
 let snapCache = { at: 0, data: null, promise: null };
 let deviceNames = { at: 0, map: new Map() };
 
+// imei -> freshest KNOWN last-GPS-fix time (epoch ms), unioned across every roster
+// and live read. Timestamps only ever move FORWARD, so a transient platform failure
+// simply fails to update an entry rather than erasing it — a bike never flips to
+// "GPS offline" just because one fetch hiccuped. Feeds the day report's can't-verify
+// classification.
+const deviceLastFix = new Map();
+function rememberFix(imei, fixMs) {
+  if (!imei || !Number.isFinite(fixMs) || fixMs <= 0) return;
+  const prev = deviceLastFix.get(imei);
+  if (prev == null || fixMs > prev) deviceLastFix.set(imei, fixMs);
+}
+
 async function getDeviceNames() {
   // Names change rarely; refresh at most every 5 min.
   if (deviceNames.map.size && Date.now() - deviceNames.at < 5 * 60_000) return deviceNames.map;
@@ -33,7 +45,12 @@ async function getDeviceNames() {
   // MERGE into the existing roster (never replace). A refresh can transiently
   // return fewer devices if a platform/sub-account call fails; overwriting would
   // make bikes vanish from the picker. Union keeps every bike once seen.
-  for (const d of list) deviceNames.map.set(d.imei, d.name);
+  for (const d of list) {
+    deviceNames.map.set(d.imei, d.name);
+    // 18gps rosters carry each tracker's last GPS fix even when it has no current
+    // position — the authoritative "is this bike's GPS alive" signal.
+    rememberFix(d.imei, d.lastFixMs);
+  }
   deviceNames.at = Date.now();
   return deviceNames.map;
 }
@@ -66,7 +83,12 @@ let locCache = { at: 0, data: null };
 async function getLiveLocations() {
   if (locCache.data && Date.now() - locCache.at < config.liveCacheMs) return locCache.data;
   const data = await gps.liveLocations();
-  locCache = { at: Date.now(), data };
+  // A live position IS a fresh GPS fix — fold it into the freshest-fix memory so
+  // Wanway bikes (whose roster has no fix time) and any just-reported 18gps bike are
+  // covered. ageSec null = fix time unknown but present → treat as "now".
+  const now = Date.now();
+  for (const l of data) rememberFix(l.imei, l.ageSec == null ? now : now - l.ageSec * 1000);
+  locCache = { at: now, data };
   return data;
 }
 
@@ -220,13 +242,21 @@ async function makeReport(date) {
     getLiveLocations().catch(() => []),
     getDeviceNames().catch(() => new Map()),
   ]);
-  // Plates whose bike is currently reporting GPS (fresh fix). A not-visited assigned
-  // customer whose bike is NOT here = "GPS offline" (can't verify) vs a real miss.
-  const maxAge = config.offlineAfterMin * 60;
+  // (getLiveLocations + getDeviceNames above have just refreshed the freshest-fix
+  // memory for every tracker they saw.) A plate is "trackable" if ANY of its
+  // trackers fixed GPS within the verify window — judged from the freshest KNOWN fix
+  // (roster last-fix ∪ live feed), NOT a single live snapshot. So a bike whose current
+  // position was dropped from the live feed, or that a transient platform failure
+  // missed, is not wrongly flagged. A not-visited assigned customer whose bike is
+  // trackable = a real miss; one whose bike was DARK all day = "can't verify".
+  void locs;
+  const now = Date.now();
+  const windowMs = config.gpsVerifyWindowMin * 60_000;
   const onlinePlates = new Set();
-  for (const l of locs) {
-    const plate = normPlate(names.get(l.imei) || '');
-    if (plate && (l.ageSec == null || l.ageSec <= maxAge)) onlinePlates.add(plate);
+  for (const [imei, fixMs] of deviceLastFix) {
+    if (now - fixMs > windowMs) continue;
+    const plate = normPlate(names.get(imei) || '');
+    if (plate) onlinePlates.add(plate);
   }
   return buildReport(gps, date, byOfficer, visitsByOfficer, extrasByOfficer, onlinePlates);
 }

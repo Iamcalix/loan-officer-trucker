@@ -109,7 +109,10 @@ export function createGpsClient() {
           for (const d of rows) {
             const imei = String(d.imei || '').trim();
             if (!imei || byImei.has(imei)) continue;
-            byImei.set(imei, { imei, name: plateFromName(d.deviceName), raw: d });
+            // Wanway's device roster carries no last-fix timestamp (only
+            // activate/expiry times), so freshness for Wanway bikes comes from the
+            // live feed instead — lastFixMs stays null here for interface parity.
+            byImei.set(imei, { imei, name: plateFromName(d.deviceName), lastFixMs: null, raw: d });
           }
           const total = Number(res.json.page?.count) || 0;
           if (page * 100 >= total || rows.length === 0) break;

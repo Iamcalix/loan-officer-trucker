@@ -138,11 +138,19 @@ export function create18gpsClient() {
 
     async listDevices() {
       const map = await this._loadBatch();
-      return [...map.values()].map((o) => ({
-        imei: String(o.sim_id || '').trim(),
-        name: cleanPlate(o.plateNumber || o.user_name),
-        raw: o,
-      }));
+      return [...map.values()].map((o) => {
+        // Last GPS fix time (epoch ms). Present for EVERY device in the roster —
+        // even ones the position feed drops (weidu/jingdu 0) — so the day report can
+        // tell a truly-dark tracker (old/zero datetime) from one that simply has no
+        // current position. 0 = never fixed.
+        const fixMs = Number(o.datetime);
+        return {
+          imei: String(o.sim_id || '').trim(),
+          name: cleanPlate(o.plateNumber || o.user_name),
+          lastFixMs: Number.isFinite(fixMs) && fixMs > 0 ? fixMs : null,
+          raw: o,
+        };
+      });
     },
 
     async liveLocations() {

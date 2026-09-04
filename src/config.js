@@ -44,6 +44,14 @@ export const config = {
   httpTimeoutMs: num(process.env.HTTP_TIMEOUT_MS, 15000),
   // How stale a signal may be before an officer is shown "offline" (minutes).
   offlineAfterMin: num(process.env.OFFLINE_AFTER_MIN, 25),
+  // For the DAY REPORT: how long a customer's bike may go without a GPS fix before
+  // we treat it as "GPS offline — can't verify" (minutes). This is deliberately much
+  // longer than offlineAfterMin: a parked customer bike sleeps for hours between
+  // fixes, so "can't verify" should mean the tracker was DARK for the whole working
+  // day — not merely quiet for the last 25 min. Judged from each tracker's freshest
+  // known GPS fix across BOTH platforms (roster last-fix + live feed), so a transient
+  // platform hiccup can't flip a whole fleet to "offline".
+  gpsVerifyWindowMin: num(process.env.GPS_VERIFY_WINDOW_MIN, 720),
   // Server-side cache TTL for the bulk live snapshot (ms). Keeps us well under
   // the platform's auth/read rate limits even with many map viewers.
   liveCacheMs: num(process.env.LIVE_CACHE_MS, 15000),

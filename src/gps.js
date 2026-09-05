@@ -112,7 +112,7 @@ export function createGpsClient() {
             // Wanway's device roster carries no last-fix timestamp (only
             // activate/expiry times), so freshness for Wanway bikes comes from the
             // live feed instead — lastFixMs stays null here for interface parity.
-            byImei.set(imei, { imei, name: plateFromName(d.deviceName), lastFixMs: null, raw: d });
+            byImei.set(imei, { imei, name: plateFromName(d.deviceName), lastFixMs: null, lastHeartMs: null, raw: d });
           }
           const total = Number(res.json.page?.count) || 0;
           if (page * 100 >= total || rows.length === 0) break;

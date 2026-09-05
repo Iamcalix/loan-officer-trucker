@@ -144,10 +144,17 @@ export function create18gpsClient() {
         // tell a truly-dark tracker (old/zero datetime) from one that simply has no
         // current position. 0 = never fixed.
         const fixMs = Number(o.datetime);
+        // Heartbeat = last time the DEVICE talked to the platform (GSM connection).
+        // This is the platform's "online" light — distinct from the GPS position fix:
+        // a parked bike keeps heart_time fresh (device online) while datetime (last
+        // position) can sit frozen for weeks. A bike is only truly "GPS offline" when
+        // BOTH are stale.
+        const heartMs = Number(o.heart_time);
         return {
           imei: String(o.sim_id || '').trim(),
           name: cleanPlate(o.plateNumber || o.user_name),
           lastFixMs: Number.isFinite(fixMs) && fixMs > 0 ? fixMs : null,
+          lastHeartMs: Number.isFinite(heartMs) && heartMs > 0 ? heartMs : null,
           raw: o,
         };
       });

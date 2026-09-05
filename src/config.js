@@ -52,6 +52,12 @@ export const config = {
   // known GPS fix across BOTH platforms (roster last-fix + live feed), so a transient
   // platform hiccup can't flip a whole fleet to "offline".
   gpsVerifyWindowMin: num(process.env.GPS_VERIFY_WINDOW_MIN, 720),
+  // A bike also counts as trackable ("not offline") if its DEVICE is still connected
+  // — a heartbeat within this window — even without a fresh GPS position fix. This is
+  // what the GPS platform's own "online" light shows: a parked bike stays connected
+  // (heartbeat) for hours while its position sits frozen. "GPS offline / can't verify"
+  // therefore means ALL of a bike's trackers are BOTH out of heartbeat AND out of fix.
+  deviceSeenWindowMin: num(process.env.DEVICE_SEEN_WINDOW_MIN, 60),
   // Server-side cache TTL for the bulk live snapshot (ms). Keeps us well under
   // the platform's auth/read rate limits even with many map viewers.
   liveCacheMs: num(process.env.LIVE_CACHE_MS, 15000),

@@ -38,6 +38,16 @@ function rememberFix(imei, fixMs) {
   if (prev == null || fixMs > prev) deviceLastFix.set(imei, fixMs);
 }
 
+// imei -> freshest KNOWN heartbeat (epoch ms): the last time the DEVICE talked to
+// the platform, whether or not it produced a GPS position. This is the platform's
+// "online" signal. Same forward-only union as deviceLastFix.
+const deviceLastSeen = new Map();
+function rememberSeen(imei, heartMs) {
+  if (!imei || !Number.isFinite(heartMs) || heartMs <= 0) return;
+  const prev = deviceLastSeen.get(imei);
+  if (prev == null || heartMs > prev) deviceLastSeen.set(imei, heartMs);
+}
+
 async function getDeviceNames() {
   // Names change rarely; refresh at most every 5 min.
   if (deviceNames.map.size && Date.now() - deviceNames.at < 5 * 60_000) return deviceNames.map;
@@ -48,8 +58,10 @@ async function getDeviceNames() {
   for (const d of list) {
     deviceNames.map.set(d.imei, d.name);
     // 18gps rosters carry each tracker's last GPS fix even when it has no current
-    // position — the authoritative "is this bike's GPS alive" signal.
+    // position — the authoritative "is this bike's GPS alive" signal — plus its last
+    // heartbeat (device-online) time.
     rememberFix(d.imei, d.lastFixMs);
+    rememberSeen(d.imei, d.lastHeartMs);
   }
   deviceNames.at = Date.now();
   return deviceNames.map;
@@ -255,13 +267,16 @@ async function makeReport(date) {
   // trackable = a real miss; one whose bike was DARK all day = "can't verify".
   void locs;
   const now = Date.now();
-  const windowMs = config.gpsVerifyWindowMin * 60_000;
+  const fixWindowMs = config.gpsVerifyWindowMin * 60_000;
+  const seenWindowMs = config.deviceSeenWindowMin * 60_000;
   const onlinePlates = new Set();
-  for (const [imei, fixMs] of deviceLastFix) {
-    if (now - fixMs > windowMs) continue;
-    const plate = normPlate(names.get(imei) || '');
-    if (plate) onlinePlates.add(plate);
-  }
+  const addIfPlate = (imei) => { const p = normPlate(names.get(imei) || ''); if (p) onlinePlates.add(p); };
+  // Trackable if the tracker fixed GPS within the verify window (position is fresh)…
+  for (const [imei, fixMs] of deviceLastFix) if (now - fixMs <= fixWindowMs) addIfPlate(imei);
+  // …OR its DEVICE is simply still connected (recent heartbeat) — the platform's own
+  // "online" light. A parked bike stays online (heartbeat) with a frozen position, so
+  // it must NOT read "GPS offline". Any one live tracker makes the whole bike online.
+  for (const [imei, heartMs] of deviceLastSeen) if (now - heartMs <= seenWindowMs) addIfPlate(imei);
   return buildReport(gps, date, byOfficer, visitsByOfficer, extrasByOfficer, onlinePlates);
 }
 

@@ -61,6 +61,11 @@ export const config = {
   // Server-side cache TTL for the bulk live snapshot (ms). Keeps us well under
   // the platform's auth/read rate limits even with many map viewers.
   liveCacheMs: num(process.env.LIVE_CACHE_MS, 15000),
+  // How often the server samples officer↔customer proximity in the BACKGROUND, so
+  // visits are logged continuously even when nobody has the live map open. Without
+  // this, sampling only happened on dashboard views and visits during unwatched
+  // periods were silently lost (officers appeared to meet far fewer customers).
+  sampleIntervalMs: num(process.env.SAMPLE_INTERVAL_MS, 45000),
 
   // The office. When an officer's fix is within radius of this point they are
   // shown "At office". Leave lat/lng unset to disable.

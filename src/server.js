@@ -575,6 +575,13 @@ await initRoster();
 await loadRegister().then((r) => console.log(`customer register loaded: ${r.length} customers`)).catch((e) => console.error('register load failed:', e.message));
 setInterval(() => { initRoster().catch(() => {}); }, 60_000).unref();
 setInterval(() => { loadRegister().catch(() => {}); }, 10 * 60_000).unref();
+// Continuously sample officer↔customer proximity so a visit is recorded even when
+// NOBODY has the live map open. getSnapshot() runs buildSnapshot(), which samples
+// every officer's current position via sampleFromRows(). Previously sampling rode
+// only on dashboard views, so any visit made while the office wasn't watching the
+// map went unlogged — the root cause of officers showing far fewer visits than they
+// actually made.
+setInterval(() => { getSnapshot().catch(() => {}); }, config.sampleIntervalMs).unref();
 
 server.listen(config.port, () => {
   console.log(`officer-tracker listening on http://localhost:${config.port}`);

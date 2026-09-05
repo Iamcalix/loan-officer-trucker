@@ -25,8 +25,14 @@ const eatDay = (sec) => new Date((sec + 3 * 3600) * 1000).toISOString().slice(0,
 // must NOT count — this is what made the live badge read 49 vs the report's 1.
 const MIN_VISIT_SEC = () => config.proximity.stopMinMinutes * 60;
 
-// officerImei -> { day, plate, name, startTs, lastTs, lastPersist }
+// officerImei -> { day, plate, name, startTs, lastTs, lastPersist, lastFreshTs }
 const open = new Map();
+
+// A parked officer's bike stops fixing GPS (engine off while he sits with the
+// customer), so its fix goes "stale" mid-visit. We keep the visit alive across that
+// gap — but only up to this long — so a genuine sit-down still counts while a bike
+// that simply dies can't inflate a visit forever.
+const MAX_STALE_COAST_SEC = 30 * 60;
 
 async function persist(officerImei, s) {
   if (!supabaseEnabled()) return;
@@ -64,8 +70,18 @@ export async function record(officerImei, place, nowSec, speedKmh, lat, lng, fix
   // cannot assert where he is now — freeze and close any open session instead.
   const officerFresh = fixAgeSec != null && fixAgeSec <= config.offlineAfterMin * 60;
   if (!officerFresh) {
+    // No fresh fix right now. NEVER open a new visit from a stale fix — that was the
+    // phantom (a bike parked all day at base near a customer's bike). But if a visit
+    // is already OPEN, the officer arrived here with a fresh fix and has since parked
+    // (bike asleep) — keep the visit alive for up to MAX_STALE_COAST_SEC so a real
+    // sit-down isn't truncated the moment the engine goes off.
     const c = open.get(officerImei);
-    if (c) { await persist(officerImei, c); open.delete(officerImei); }
+    if (c && nowSec - (c.lastFreshTs || c.startTs) <= MAX_STALE_COAST_SEC) {
+      c.lastTs = nowSec;
+      if (nowSec - (c.lastPersist || 0) >= 60) await persist(officerImei, c);
+    } else if (c) {
+      await persist(officerImei, c); open.delete(officerImei);
+    }
     return;
   }
   const stationary = speedKmh == null ? true : speedKmh <= config.proximity.stopSpeedKmh;
@@ -91,6 +107,7 @@ export async function record(officerImei, place, nowSec, speedKmh, lat, lng, fix
   if (target && cur && cur.plate === target.plate) {
     // same session continues — extend it, keep the latest location
     cur.lastTs = nowSec;
+    cur.lastFreshTs = nowSec; // witnessed present with a fresh fix
     if (hasPos) { cur.lat = lat; cur.lng = lng; }
     if (nowSec - (cur.lastPersist || 0) >= 60) await persist(officerImei, cur);
     return;
@@ -100,7 +117,7 @@ export async function record(officerImei, place, nowSec, speedKmh, lat, lng, fix
   if (target) {
     const s = {
       day: eatDay(nowSec), plate: target.plate, name: target.name,
-      startTs: nowSec, lastTs: nowSec, lastPersist: 0,
+      startTs: nowSec, lastTs: nowSec, lastPersist: 0, lastFreshTs: nowSec,
       lat: hasPos ? lat : null, lng: hasPos ? lng : null,
     };
     open.set(officerImei, s);

@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { config, assertConfigured } from './config.js';
 import { createFleetClient } from './fleet.js';
 import { officerFor, officerImeis, hasRoster, saveRoster, initRoster } from './officers.js';
-import { loadRegister, matchCandidates, registerSize, customerByPlate } from './register.js';
+import { loadRegister, matchCandidates, registerSize, customerByPlate, mapDbStatus } from './register.js';
 import { saveAssignments, setAssignmentPlate, setComment, getAssignments, assignedPlatesForDay } from './assignments.js';
 import { sampleFromRows, getVisits, getExtras } from './visitlog.js';
 import { officePlace, haversineM } from './places.js';
@@ -419,7 +419,7 @@ const server = http.createServer(async (req, res) => {
     // bulk import) instead of waiting for the periodic refresh.
     if (p === '/api/register/reload' && req.method === 'POST') {
       const list = await loadRegister();
-      return sendJson(res, 200, { ok: true, size: list.length });
+      return sendJson(res, 200, { ok: true, size: list.length, mapDb: mapDbStatus() });
     }
 
     // Save a per-customer note: { day?, officerImei, enteredName, comment }.

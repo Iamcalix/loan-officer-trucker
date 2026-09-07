@@ -42,6 +42,8 @@ function tokenMatch(x, y) {
 let index = []; // [{ plate, name, phone, grp, norm, tokens }]
 let byPlate = new Map();
 let loadedAt = 0;
+let lastUnion = { configured: false, added: 0, fetched: 0, error: null }; // ERP mapDb diagnostics
+export function mapDbStatus() { return lastUnion; }
 
 export async function loadRegister() {
   if (!supabaseEnabled()) { index = []; byPlate = new Map(); return index; }
@@ -63,8 +65,10 @@ export async function loadRegister() {
   // coverage — it can never turn a currently-matched customer into unmatched. A name
   // that only exists there now resolves to its plate; on a plate the primary already
   // has, the primary's curated entry stays the one `customerByPlate` returns.
+  lastUnion = { configured: Boolean(config.mapDb.url && config.mapDb.key), added: 0, fetched: 0, error: null };
   try {
     const extra = await loadMapDb();
+    lastUnion.fetched = extra.length;
     const seen = new Set(index.map((r) => `${normPlate(r.plate)}|${r.norm}`));
     let added = 0;
     for (const r of extra) {
@@ -78,9 +82,11 @@ export async function loadRegister() {
       if (!byPlate.has(normPlate(r.plate))) byPlate.set(normPlate(r.plate), row);
       added += 1;
     }
+    lastUnion.added = added;
     if (added) console.log(`register: +${added} name↔plate pairs from ERP mapping DB`);
   } catch (e) {
     // The mapping DB is a best-effort supplement — never let it block the primary.
+    lastUnion.error = String(e.message || e).slice(0, 300);
     console.error('ERP mapping DB union skipped:', e.message);
   }
 

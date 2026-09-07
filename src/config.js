@@ -41,6 +41,20 @@ export const config = {
     key: process.env.SUPABASE_KEY || process.env.SUPABASE_SERVICE_KEY || '',
   },
 
+  // Optional SECOND mapping source: the ELEGANSKY ERP customer registry (the
+  // "session puller" Supabase). The register UNIONS this in on load (additive — it
+  // never drops the primary register, so it can only ADD name↔plate coverage / kill
+  // unmatched, never create new unmatched). Only rows WITH a plate are used. Unset →
+  // ignored.
+  mapDb: {
+    url: (process.env.MAP_DB_URL || '').replace(/\/+$/, ''),
+    key: process.env.MAP_DB_KEY || '',
+    table: process.env.MAP_DB_TABLE || 'customer_registry',
+    nameCol: process.env.MAP_DB_NAME_COL || 'customer_name',
+    plateCol: process.env.MAP_DB_PLATE_COL || 'plate',
+    phoneCol: process.env.MAP_DB_PHONE_COL || 'phone',
+  },
+
   httpTimeoutMs: num(process.env.HTTP_TIMEOUT_MS, 15000),
   // How stale a signal may be before an officer is shown "offline" (minutes).
   offlineAfterMin: num(process.env.OFFLINE_AFTER_MIN, 25),

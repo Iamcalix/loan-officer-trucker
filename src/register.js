@@ -9,6 +9,7 @@
 // Table: customers(plate pk, name, name_norm, phone, parent, grp)
 
 import { supabaseEnabled, sbSelect } from './supa.js';
+import { config } from './config.js';
 
 export function normalizeName(s) {
   return String(s || '').toUpperCase().replace(/[^A-Z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
@@ -56,8 +57,55 @@ export async function loadRegister() {
     return { plate: r.plate, name: r.name, phone: r.phone || '', grp: r.grp || '', norm, toks: tokensOf(norm) };
   });
   byPlate = new Map(index.map((r) => [normPlate(r.plate), r]));
+
+  // UNION in the ERP mapping DB (the "session puller"), if configured. Purely
+  // ADDITIVE: every primary-register entry is kept, so this can only add name↔plate
+  // coverage — it can never turn a currently-matched customer into unmatched. A name
+  // that only exists there now resolves to its plate; on a plate the primary already
+  // has, the primary's curated entry stays the one `customerByPlate` returns.
+  try {
+    const extra = await loadMapDb();
+    const seen = new Set(index.map((r) => `${normPlate(r.plate)}|${r.norm}`));
+    let added = 0;
+    for (const r of extra) {
+      const norm = normalizeName(r.name);
+      if (!r.plate || !norm) continue;
+      const key = `${normPlate(r.plate)}|${norm}`;
+      if (seen.has(key)) continue; // exact plate+name already present
+      seen.add(key);
+      const row = { plate: r.plate, name: r.name, phone: r.phone || '', grp: 'erp-registry', norm, toks: tokensOf(norm) };
+      index.push(row);
+      if (!byPlate.has(normPlate(r.plate))) byPlate.set(normPlate(r.plate), row);
+      added += 1;
+    }
+    if (added) console.log(`register: +${added} name↔plate pairs from ERP mapping DB`);
+  } catch (e) {
+    // The mapping DB is a best-effort supplement — never let it block the primary.
+    console.error('ERP mapping DB union skipped:', e.message);
+  }
+
   loadedAt = Date.now();
   return index;
+}
+
+// Pull name↔plate↔phone rows from the optional ERP mapping DB (second Supabase).
+// Only rows WITH a plate are useful for name→plate resolution. Paginated.
+async function loadMapDb() {
+  const { url, key, table, nameCol, plateCol, phoneCol } = config.mapDb;
+  if (!url || !key) return [];
+  const out = [];
+  const sel = [nameCol, plateCol, phoneCol].join(',');
+  for (let offset = 0; ; offset += 1000) {
+    const r = await fetch(
+      `${url}/rest/v1/${table}?select=${sel}&${plateCol}=not.is.null&order=${plateCol}&limit=1000&offset=${offset}`,
+      { headers: { apikey: key, Authorization: `Bearer ${key}` }, signal: AbortSignal.timeout(config.httpTimeoutMs) },
+    );
+    if (!r.ok) throw new Error(`mapDb ${table} -> ${r.status}`);
+    const page = await r.json();
+    for (const x of page) out.push({ name: x[nameCol], plate: x[plateCol], phone: x[phoneCol] });
+    if (page.length < 1000) break;
+  }
+  return out;
 }
 
 export function registerSize() { return index.length; }

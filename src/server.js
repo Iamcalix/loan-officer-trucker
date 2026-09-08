@@ -142,6 +142,44 @@ function placeFor(officerPos, customerBikes, assignedSet) {
   return null;
 }
 
+// EVERY assigned customer the officer is currently within range of, with a
+// TRUSTWORTHY (recent) bike position. Lets a single clustered stop credit all the
+// assigned customers parked there — not just the nearest — while a stale "ghost"
+// position (bike last fixed days ago) is excluded so it can't fabricate a visit.
+function assignedInRangeFor(officerPos, customerBikes, assignedSet) {
+  const R = config.proximity.customerRadiusM;
+  const maxAge = config.custPosTrustMin * 60;
+  const out = [];
+  for (const c of customerBikes) {
+    if (!assignedSet.has(c.plate)) continue;
+    if (c.ageSec == null || c.ageSec > maxAge) continue; // position not current → can't confirm presence
+    const d = haversineM(officerPos, c);
+    if (d <= R) out.push({ plate: c.plate, name: c.name, custSpeed: c.speed, distM: Math.round(d) });
+  }
+  out.sort((a, b) => a.distM - b.distM);
+  return out;
+}
+
+// The officer's NON-assigned place (office, else a genuine unassigned meeting) —
+// recorded only when they are not with any assigned customer. Mirrors placeFor's
+// office-then-unassigned precedence (unassigned is never reported at the office).
+function fallbackPlaceFor(officerPos, customerBikes, assignedSet) {
+  const office = officePlace();
+  if (office) {
+    const d = haversineM(officerPos, office);
+    if (d <= office.radiusM) return { type: 'office', name: office.name, distM: Math.round(d) };
+  }
+  const Ru = config.proximity.unassignedRadiusM;
+  let bestU = null;
+  for (const c of customerBikes) {
+    if (assignedSet.has(c.plate)) continue;
+    const d = haversineM(officerPos, c);
+    if (d <= Ru && (!bestU || d < bestU.d)) bestU = { d, plate: c.plate, name: c.name, speed: c.speed };
+  }
+  if (bestU) return { type: 'customer', plate: bestU.plate, name: bestU.name, assigned: false, distM: Math.round(bestU.d), custSpeed: bestU.speed };
+  return null;
+}
+
 // Live status label from a fix + optional real-time status.
 function liveLabel(place, st) {
   if (st && st.online === false) return { state: 'offline', text: 'Offline' };
@@ -164,7 +202,7 @@ async function buildSnapshot() {
   const customerBikes = restrict
     ? locs.filter((l) => !roster.has(l.imei)).map((l) => {
         const plate = normPlate(names.get(l.imei) || '');
-        return plate ? { lat: l.lat, lng: l.lng, speed: l.speed ?? null, plate, name: customerByPlate(plate)?.name || names.get(l.imei) || l.imei } : null;
+        return plate ? { lat: l.lat, lng: l.lng, speed: l.speed ?? null, ageSec: l.ageSec ?? null, plate, name: customerByPlate(plate)?.name || names.get(l.imei) || l.imei } : null;
       }).filter(Boolean)
     : [];
 
@@ -182,10 +220,15 @@ async function buildSnapshot() {
 
   const snapshot = rows.map((l) => {
     const o = officerFor(l.imei);
-    const place = placeFor(l, customerBikes, assignedByOff.get(l.imei) || new Set());
+    const aset = assignedByOff.get(l.imei) || new Set();
+    const place = placeFor(l, customerBikes, aset);
     const st = statusByImei.get(l.imei) || null;
     return {
       imei: l.imei,
+      // For visit logging: every assigned customer in range (fresh position) so a
+      // clustered stop credits them all, plus the non-assigned fallback place.
+      assignedInRange: assignedInRangeFor(l, customerBikes, aset),
+      fallbackPlace: fallbackPlaceFor(l, customerBikes, aset),
       name: o?.name || names.get(l.imei) || l.imei,
       phone: o?.phone || null,
       area: o?.area || null,

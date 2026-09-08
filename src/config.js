@@ -72,6 +72,12 @@ export const config = {
   // (heartbeat) for hours while its position sits frozen. "GPS offline / can't verify"
   // therefore means ALL of a bike's trackers are BOTH out of heartbeat AND out of fix.
   deviceSeenWindowMin: num(process.env.DEVICE_SEEN_WINDOW_MIN, 60),
+  // For crediting a VISIT: a customer bike's POSITION fix must be at least this fresh
+  // for us to trust it's really where the feed says. Guards the "credit every assigned
+  // customer at a clustered stop" logic against stale "ghost" positions (a bike whose
+  // last fix is days old could be anywhere now — being near its ghost coordinate is not
+  // proof the officer met them). Minutes.
+  custPosTrustMin: num(process.env.CUST_POS_TRUST_MIN, 720),
   // Server-side cache TTL for the bulk live snapshot (ms). Keeps us well under
   // the platform's auth/read rate limits even with many map viewers.
   liveCacheMs: num(process.env.LIVE_CACHE_MS, 15000),

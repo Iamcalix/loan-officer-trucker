@@ -26,7 +26,15 @@ const eatDay = (sec) => new Date((sec + 3 * 3600) * 1000).toISOString().slice(0,
 const MIN_VISIT_SEC = () => config.proximity.stopMinMinutes * 60;
 
 // officerImei -> { day, plate, name, startTs, lastTs, lastPersist, lastFreshTs }
+// The single "fallback" session per officer: office presence / off-plan stop /
+// unassigned meeting (only while NOT with an assigned customer).
 const open = new Map();
+
+// officerImei -> Map(normPlate -> session): CONCURRENT assigned-customer visits.
+// An officer parked among several assigned customers' bikes is "with" all of them,
+// so each gets its own live session — a clustered stop no longer credits only the
+// nearest one.
+const openA = new Map();
 
 // A parked officer's bike stops fixing GPS (engine off while he sits with the
 // customer), so its fix goes "stale" mid-visit. We keep the visit alive across that
@@ -57,62 +65,87 @@ async function persist(officerImei, s) {
 const UNKNOWN_PLATE = 'UNK';
 const OFFICE_PLATE = 'OFFICE';
 
-// Record one officer's current state at sample time. `place` is the assigned-place
-// result ({type:'customer'|'office', name, plate} or null). Only a STATIONARY
-// officer is logged, either as WITH one of their assigned customers, or — if
-// stopped somewhere that is neither an assigned customer nor the office — as an
-// OFF-PLAN ("unknown") stop.
-export async function record(officerImei, place, nowSec, speedKmh, lat, lng, fixAgeSec) {
-  // GATE: only log a visit from a FRESH officer fix. A parked/stale tracker keeps
-  // echoing its last position on every refresh; without this, an officer whose bike
-  // sits all day near a customer's parked bike accrues a phantom all-day "visit" he
-  // never made (he never travelled there). If the officer's fix isn't recent we
-  // cannot assert where he is now — freeze and close any open session instead.
+// Record one officer's current state at sample time.
+//   assignedInRange: [{plate, name, custSpeed}] — EVERY assigned customer within
+//     range with a trustworthy position (already gated server-side). All are credited.
+//   fallbackPlace: {type:'office'|'customer'(unassigned)} or null — used ONLY when the
+//     officer is with no assigned customer (office presence / off-plan / unassigned).
+// Freshness rule (both paths): a FRESH officer fix is needed to OPEN a session (proves
+// he arrived), but an open session COASTS through a stale gap (engine off while he sits)
+// up to MAX_STALE_COAST_SEC — so parked visits aren't truncated and stale-at-base bikes
+// can't fabricate a visit.
+export async function record(officerImei, assignedInRange, fallbackPlace, nowSec, speedKmh, lat, lng, fixAgeSec) {
   const officerFresh = fixAgeSec != null && fixAgeSec <= config.offlineAfterMin * 60;
-  if (!officerFresh) {
-    // No fresh fix right now. NEVER open a new visit from a stale fix — that was the
-    // phantom (a bike parked all day at base near a customer's bike). But if a visit
-    // is already OPEN, the officer arrived here with a fresh fix and has since parked
-    // (bike asleep) — keep the visit alive for up to MAX_STALE_COAST_SEC so a real
-    // sit-down isn't truncated the moment the engine goes off.
-    const c = open.get(officerImei);
-    if (c && nowSec - (c.lastFreshTs || c.startTs) <= MAX_STALE_COAST_SEC) {
-      c.lastTs = nowSec;
-      if (nowSec - (c.lastPersist || 0) >= 60) await persist(officerImei, c);
-    } else if (c) {
-      await persist(officerImei, c); open.delete(officerImei);
+  const officerStopped = speedKmh == null ? true : speedKmh <= config.proximity.meetSpeedKmh;
+  const stationary = speedKmh == null ? true : speedKmh <= config.proximity.stopSpeedKmh;
+  const hasPos = Number.isFinite(lat) && Number.isFinite(lng);
+  const coasting = (s) => nowSec - (s.lastFreshTs || s.startTs) <= MAX_STALE_COAST_SEC;
+  const bump = async (s) => { s.lastTs = nowSec; if (hasPos) { s.lat = lat; s.lng = lng; } if (nowSec - (s.lastPersist || 0) >= 60) await persist(officerImei, s); };
+
+  // ---------- ASSIGNED customers in range (concurrent sessions) ----------
+  // The officer is "with" a customer when HE is stopped and the customer's bike isn't
+  // riding by. Every qualifying assigned customer is a live target this sample.
+  const current = new Map(); // normPlate -> display name
+  if (officerStopped) {
+    for (const c of (assignedInRange || [])) {
+      const custStopped = c.custSpeed == null ? true : c.custSpeed <= config.proximity.movingSpeedKmh;
+      if (custStopped) current.set(normPlate(c.plate), c.name);
     }
+  }
+  const aMap = openA.get(officerImei) || new Map();
+  // open / extend each current target
+  for (const [plate, name] of current) {
+    const s = aMap.get(plate);
+    if (s) {
+      if (officerFresh) { s.lastFreshTs = nowSec; await bump(s); }
+      else if (coasting(s)) { await bump(s); }         // parked, engine off — keep alive
+      // else: stale too long → closed by the sweep below
+    } else if (officerFresh) {                          // fresh fix here = genuine arrival
+      const ns = { day: eatDay(nowSec), plate, name: customerByPlate(plate)?.name || name,
+        startTs: nowSec, lastTs: nowSec, lastPersist: 0, lastFreshTs: nowSec,
+        lat: hasPos ? lat : null, lng: hasPos ? lng : null };
+      aMap.set(plate, ns);
+      await persist(officerImei, ns);
+    }
+  }
+  // close assigned sessions no longer current (moved on) or stale beyond the coast
+  for (const [plate, s] of [...aMap]) {
+    if (current.has(plate) && coasting(s)) continue;
+    await persist(officerImei, s); aMap.delete(plate);
+  }
+  if (aMap.size) openA.set(officerImei, aMap); else openA.delete(officerImei);
+
+  // ---------- Fallback (office / off-plan / unassigned) — only when with NO assigned ----------
+  if (current.size > 0) {
+    const c = open.get(officerImei);
+    if (c) { await persist(officerImei, c); open.delete(officerImei); }
     return;
   }
-  const stationary = speedKmh == null ? true : speedKmh <= config.proximity.stopSpeedKmh;
-  // "Stopped to talk": the officer's bike is essentially STOPPED (≈0). The customer
-  // side is lenient — we only rule out a customer who is clearly RIDING BY (moving
-  // fast), so GPS jitter on a parked bike never drops a real meeting.
-  const meet = config.proximity.meetSpeedKmh;
-  const officerStopped = speedKmh == null ? true : speedKmh <= meet;
-  const custStopped = place?.custSpeed == null ? true : place.custSpeed <= config.proximity.movingSpeedKmh;
-  const hasPos = Number.isFinite(lat) && Number.isFinite(lng);
-
+  if (!officerFresh) {
+    const c = open.get(officerImei);
+    if (c && coasting(c)) { await bump(c); }
+    else if (c) { await persist(officerImei, c); open.delete(officerImei); }
+    return;
+  }
   let target = null; // { plate, name }
-  if (place && place.type === 'customer' && officerStopped && custStopped) {
-    const pl = normPlate(place.plate || place.name);
-    target = { plate: pl, name: customerByPlate(pl)?.name || place.name };
-  } else if (place && place.type === 'office') {
-    target = { plate: OFFICE_PLATE, name: '' }; // at the head office — track presence to know when they leave
-  } else if (stationary && hasPos && !place) {
+  if (fallbackPlace && fallbackPlace.type === 'office') {
+    target = { plate: OFFICE_PLATE, name: '' };
+  } else if (fallbackPlace && fallbackPlace.type === 'customer') { // an unassigned bike
+    const custStopped = fallbackPlace.custSpeed == null ? true : fallbackPlace.custSpeed <= config.proximity.movingSpeedKmh;
+    if (officerStopped && custStopped) {
+      const pl = normPlate(fallbackPlace.plate || fallbackPlace.name);
+      target = { plate: pl, name: customerByPlate(pl)?.name || fallbackPlace.name };
+    } else if (stationary && hasPos) target = { plate: UNKNOWN_PLATE, name: '' };
+  } else if (stationary && hasPos) {
     target = { plate: UNKNOWN_PLATE, name: '' }; // stopped off-plan
   }
 
   const cur = open.get(officerImei);
   if (target && cur && cur.plate === target.plate) {
-    // same session continues — extend it, keep the latest location
-    cur.lastTs = nowSec;
-    cur.lastFreshTs = nowSec; // witnessed present with a fresh fix
-    if (hasPos) { cur.lat = lat; cur.lng = lng; }
-    if (nowSec - (cur.lastPersist || 0) >= 60) await persist(officerImei, cur);
+    cur.lastFreshTs = nowSec;
+    await bump(cur);
     return;
   }
-  // state changed (moved on / different customer / went to office) — close previous
   if (cur) { await persist(officerImei, cur); open.delete(officerImei); }
   if (target) {
     const s = {
@@ -129,9 +162,9 @@ export async function record(officerImei, place, nowSec, speedKmh, lat, lng, fix
 // place). Called from buildSnapshot so it runs on every dashboard refresh.
 export async function sampleFromRows(rows, nowSec) {
   for (const r of rows) {
-    // r.place is the map snapshot's place ({type,name,distM}) or null; r.speedKmh
-    // gates out drive-bys; r.fixAgeSec gates out a stale/parked officer fix.
-    await record(r.imei, r.place, nowSec, r.speedKmh, r.lat, r.lng, r.fixAgeSec).catch(() => {});
+    // r.assignedInRange = every assigned customer in range (fresh position); r.fallbackPlace
+    // = office/unassigned/off-plan; r.speedKmh gates drive-bys; r.fixAgeSec gates a stale fix.
+    await record(r.imei, r.assignedInRange, r.fallbackPlace, nowSec, r.speedKmh, r.lat, r.lng, r.fixAgeSec).catch(() => {});
   }
 }
 

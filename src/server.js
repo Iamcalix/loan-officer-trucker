@@ -284,6 +284,10 @@ async function getSnapshot() {
   return snapCache.promise;
 }
 
+// Last successful visits read per day — guards the report against a transient DB
+// blip blanking every officer's visits to "not visited".
+let lastGoodVisits = { day: null, map: new Map() };
+
 // Build the per-agent follow-list report. Shared by the endpoint and the nightly
 // scheduler.
 async function makeReport(date) {
@@ -295,12 +299,22 @@ async function makeReport(date) {
     if (!byOfficer.has(r.officerImei)) byOfficer.set(r.officerImei, []);
     byOfficer.get(r.officerImei).push(r);
   }
-  const [visitsByOfficer, extrasByOfficer, locs, names] = await Promise.all([
-    getVisits(date).catch(() => new Map()),
+  let [visitsByOfficer, extrasByOfficer, locs, names] = await Promise.all([
+    getVisits(date).catch(() => null),
     getExtras(date).catch(() => new Map()),
     getLiveLocations().catch(() => []),
     getDeviceNames().catch(() => new Map()),
   ]);
+  // A transient Supabase read must NEVER blank the day's visits — that would flash
+  // every customer to "not visited" for one load (looks like visits "disappearing").
+  // Keep the last good visits per day and fall back to it on a failed/empty read.
+  if (visitsByOfficer && visitsByOfficer.size) {
+    lastGoodVisits = { day: date, map: visitsByOfficer };
+  } else if (lastGoodVisits.day === date && lastGoodVisits.map.size) {
+    visitsByOfficer = lastGoodVisits.map; // read glitched — reuse last good rather than blanking
+  } else {
+    visitsByOfficer = visitsByOfficer || new Map();
+  }
   // (getLiveLocations + getDeviceNames above have just refreshed the freshest-fix
   // memory for every tracker they saw.) A plate is "trackable" if ANY of its
   // trackers fixed GPS within the verify window — judged from the freshest KNOWN fix

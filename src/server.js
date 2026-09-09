@@ -320,7 +320,23 @@ async function makeReport(date) {
   // "online" light. A parked bike stays online (heartbeat) with a frozen position, so
   // it must NOT read "GPS offline". Any one live tracker makes the whole bike online.
   for (const [imei, heartMs] of deviceLastSeen) if (now - heartMs <= seenWindowMs) addIfPlate(imei);
-  return buildReport(gps, date, byOfficer, visitsByOfficer, extrasByOfficer, onlinePlates);
+
+  // Officers whose OWN tracker is dark today — their movement can't be seen, so their
+  // report must say "tracker offline / can't verify" instead of blaming them with a
+  // page of "not visited". One live status() per officer (small roster) gives the
+  // reliable signal (the bulk feed can omit gpsTime for Wanway units). Only flag on a
+  // definite signal (device offline or position frozen well beyond the verify window);
+  // a failed status call is left un-flagged so a transient blip doesn't mislabel.
+  const officerOffline = new Set();
+  const offImeis = [...officerImeis()];
+  for (let i = 0; i < offImeis.length; i += 8) {
+    const batch = offImeis.slice(i, i + 8);
+    const res = await Promise.all(batch.map((im) => gps.status(im).then((s) => [im, s]).catch(() => [im, null])));
+    for (const [im, s] of res) {
+      if (s && (s.online === false || (s.ageSec != null && s.ageSec > fixWindowMs / 1000))) officerOffline.add(im);
+    }
+  }
+  return buildReport(gps, date, byOfficer, visitsByOfficer, extrasByOfficer, onlinePlates, officerOffline);
 }
 
 // -------------------------------- routing ------------------------------------

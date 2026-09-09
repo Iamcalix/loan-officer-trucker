@@ -59,7 +59,7 @@ function assignedSummary(items, visits, onlinePlates) {
 // Build the per-agent follow-list report for a date. `assignmentsByOfficer` maps
 // officerImei -> assignment items; `visitsByOfficer` maps officerImei -> logged
 // visits. (gps is unused now — kept for a stable call signature.)
-export async function buildReport(gps, date = eatToday(), assignmentsByOfficer = new Map(), visitsByOfficer = new Map(), extrasByOfficer = new Map(), onlinePlates = null) {
+export async function buildReport(gps, date = eatToday(), assignmentsByOfficer = new Map(), visitsByOfficer = new Map(), extrasByOfficer = new Map(), onlinePlates = null, officerOffline = null) {
   const officers = [...officerImeis()].map((imei) => {
     const o = officerFor(imei);
     const items = assignmentsByOfficer.get(imei) || [];
@@ -106,6 +106,9 @@ export async function buildReport(gps, date = eatToday(), assignmentsByOfficer =
       imei,
       name: o?.name || imei,
       area: o?.area || null,
+      // The officer's OWN tracker was offline/dark today, so NONE of his movement
+      // was visible — "not visited" here reflects a dead tracker, not skipped work.
+      trackerOffline: officerOffline ? officerOffline.has(imei) : false,
       assigned,
       unassigned,
       between,
@@ -143,6 +146,9 @@ function officerBlock(o) {
   let h = `<div class="officer"><h2>${esc(o.name)}</h2>
     <div class="sub">${o.area ? esc(o.area) + ' · ' : ''}${a ? `${a.visited}/${a.total} assigned customers visited` : 'no follow-list assigned today'}</div>
     <div class="sub">${shift}</div>`;
+  if (o.trackerOffline) {
+    h += `<div class="warn">⚠ This officer's GPS tracker was offline today — his movement couldn't be tracked, so visits can't be verified. The rows below are NOT proof he skipped these customers; his tracker needs checking.</div>`;
+  }
 
   if (a) {
     const visited = a.items.filter((i) => i.visited).sort((x, y) => y.minutes - x.minutes);
@@ -162,8 +168,11 @@ function officerBlock(o) {
         <td><b>${dur(i.minutes)}</b></td><td class="muted">${i.stops.map((s) => hm(s.start) + '–' + hm(s.end)).join(', ')}</td><td>${where}</td><td>${esc(i.comment)}</td></tr>`;
     }
     for (const i of notVisited) {
+      const tag = o.trackerOffline
+        ? `<span class="tag t-offline">Unverified — officer tracker off</span>`
+        : `<span class="tag t-unknown">Not visited</span>`;
       h += `<tr><td>${esc(i.name)}${i.matched ? '' : ' <span class="muted">(unmatched)</span>'}</td>
-        <td><span class="tag t-unknown">Not visited</span></td><td class="muted">—</td><td></td><td class="muted">—</td><td>${esc(i.comment)}</td></tr>`;
+        <td>${tag}</td><td class="muted">${o.trackerOffline ? "can't verify" : '—'}</td><td></td><td class="muted">—</td><td>${esc(i.comment)}</td></tr>`;
     }
     for (const i of offline) {
       h += `<tr><td>${esc(i.name)}${i.matched ? '' : ' <span class="muted">(unmatched)</span>'}</td>
@@ -232,6 +241,7 @@ export function renderReportHtml(report) {
   .tag{display:inline-block;font-size:11px;padding:1px 7px;border-radius:10px}
   .t-customer{background:#dcfce7;color:#14532d}.t-unknown{background:#ffedd5;color:#7c2d12}.t-offline{background:#e2e8f0;color:#334155}
   .muted{color:#777} a{color:#2563eb}
+  .warn{background:#fef3c7;border:1px solid #f59e0b;color:#92400e;padding:8px 10px;border-radius:6px;font-size:12px;margin:6px 0 10px}
   .empty{color:#777;padding:40px;text-align:center}
 </style></head><body><div id="wrap">
   <h1>Field Officer — Follow-list Report</h1>

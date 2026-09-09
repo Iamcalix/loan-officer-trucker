@@ -27,6 +27,7 @@
   .tag { display:inline-block; font-size:11px; padding:1px 7px; border-radius:10px; }
   .t-office { background:#1e3a8a; color:#bfdbfe; } .t-customer { background:#14532d; color:#bbf7d0; } .t-unknown { background:#7c2d12; color:#fed7aa; } .t-offline { background:#334155; color:#cbd5e1; }
   .muted { color:var(--mut); }
+  .warn { background:#422006; border:1px solid #a16207; color:#fde68a; padding:8px 10px; border-radius:6px; font-size:12px; margin:6px 0 10px; }
   h3 { font-size:13px; margin:14px 0 4px; }
   a { color:#93c5fd; }
   .empty { color:var(--mut); padding:40px; text-align:center; }
@@ -116,6 +117,9 @@ function render(j) {
       <h2>${o.name}</h2>
       <div class="sub">${o.area ? o.area + ' · ' : ''}${a ? `${a.visited}/${a.total} assigned customers visited` : 'no follow-list assigned today'}</div>
       <div class="sub">${shift}</div>`;
+    if (o.trackerOffline) {
+      html += `<div class="warn">⚠ This officer's GPS tracker was offline today — his movement couldn't be tracked, so visits can't be verified. The rows below are NOT proof he skipped these customers; his tracker needs checking.</div>`;
+    }
     if (a) {
       const visited = a.items.filter((i) => i.visited).sort((x, y) => y.minutes - x.minutes);
       const offline = a.items.filter((i) => !i.visited && i.gpsOffline);
@@ -134,8 +138,11 @@ function render(j) {
           <td><b>${dur(i.minutes)}</b></td><td class="muted">${i.stops.map((s) => hm(s.start) + '–' + hm(s.end)).join(', ')}</td><td>${where}</td>${noteCell(o.imei, i)}</tr>`;
       }
       for (const i of notVisited) {
+        const tag = o.trackerOffline
+          ? `<span class="tag t-offline">Unverified — officer tracker off</span>`
+          : `<span class="tag t-unknown">Not visited</span>`;
         html += `<tr><td>${i.name}${i.matched ? '' : ' <span class="muted">(unmatched)</span>'}</td>
-          <td><span class="tag t-unknown">Not visited</span></td><td class="muted">—</td><td></td><td class="muted">—</td>${noteCell(o.imei, i)}</tr>`;
+          <td>${tag}</td><td class="muted">${o.trackerOffline ? "can't verify" : '—'}</td><td></td><td class="muted">—</td>${noteCell(o.imei, i)}</tr>`;
       }
       for (const i of offline) {
         html += `<tr><td>${i.name}${i.matched ? '' : ' <span class="muted">(unmatched)</span>'}</td>

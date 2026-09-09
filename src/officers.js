@@ -60,12 +60,27 @@ export function hasRoster() {
 // Persist a new roster (IMEI -> {name, area, phone}) durably, then refresh the
 // cache so reads see it immediately. Wholesale replace (matches the picker's
 // "these are all the officers now" semantics).
-export async function saveRoster(map) {
-  if (supabaseEnabled()) {
-    await writeOfficers(map);
-  } else {
-    writeFile(map);
+export async function saveRoster(map, { force = false } = {}) {
+  // LOCK: by default protect the existing officer↔tracker bindings. Visits are keyed
+  // by tracker IMEI, so silently dropping an officer or reassigning an IMEI to another
+  // officer re-attributes their history and makes visited counts jump between people.
+  // A normal save MERGES: it may ADD new officers and update an officer's own
+  // area/phone, but it will NOT remove an existing officer or rebind an IMEI to a
+  // different name. Deliberate reorganisation passes { force: true }.
+  let next = map;
+  if (!force && Object.keys(cache).length) {
+    next = { ...cache };
+    for (const [imei, v] of Object.entries(map)) {
+      const existing = cache[imei];
+      if (existing && existing.name && v?.name && existing.name.trim().toUpperCase() !== v.name.trim().toUpperCase()) {
+        next[imei] = { ...existing, area: v.area || existing.area, phone: v.phone || existing.phone };
+      } else {
+        next[imei] = v; // same officer (update) or a brand-new IMEI (add)
+      }
+    }
   }
-  cache = map;
-  return map;
+  if (supabaseEnabled()) await writeOfficers(next);
+  else writeFile(next);
+  cache = next;
+  return next;
 }

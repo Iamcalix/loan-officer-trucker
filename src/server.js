@@ -305,13 +305,16 @@ async function makeReport(date) {
     getLiveLocations().catch(() => []),
     getDeviceNames().catch(() => new Map()),
   ]);
-  // A transient Supabase read must NEVER blank the day's visits — that would flash
-  // every customer to "not visited" for one load (looks like visits "disappearing").
-  // Keep the last good visits per day and fall back to it on a failed/empty read.
-  if (visitsByOfficer && visitsByOfficer.size) {
-    lastGoodVisits = { day: date, map: visitsByOfficer };
-  } else if (lastGoodVisits.day === date && lastGoodVisits.map.size) {
-    visitsByOfficer = lastGoodVisits.map; // read glitched — reuse last good rather than blanking
+  // A transient/partial Supabase read must NEVER reduce the day's visits — that flashes
+  // customers back to "not visited" (SHAFII seen dropping 8→4). Within a day visits ONLY
+  // accumulate, so ANY read returning FEWER visits than we've already seen today is a
+  // glitch: keep the last-good map and reuse it instead of showing the smaller result.
+  const countVisits = (m) => { let n = 0; if (m) for (const arr of m.values()) n += arr.length; return n; };
+  const lastCount = lastGoodVisits.day === date ? countVisits(lastGoodVisits.map) : 0;
+  if (visitsByOfficer && countVisits(visitsByOfficer) >= lastCount) {
+    lastGoodVisits = { day: date, map: visitsByOfficer }; // fresh best
+  } else if (lastCount > 0) {
+    visitsByOfficer = lastGoodVisits.map; // failed/partial read — reuse last good
   } else {
     visitsByOfficer = visitsByOfficer || new Map();
   }

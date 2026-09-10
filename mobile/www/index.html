@@ -86,6 +86,8 @@
 <script>
 const API = localStorage.getItem('apiBase') || 'https://tracker.eleganskyfinance.com';
 const $ = (id) => document.getElementById(id);
+// fetch with a hard timeout so a slow/dead request never hangs the UI
+const api = (path, opts = {}) => fetch(API + path, { ...opts, signal: AbortSignal.timeout(opts.timeout || 25000) });
 const show = (id) => { for (const s of ['pickView','listView','capView']) $(s).classList.toggle('hide', s !== id); };
 const toast = (m) => { const t=$('toast'); t.textContent=m; t.classList.remove('hide'); clearTimeout(t._t); t._t=setTimeout(()=>t.classList.add('hide'),2600); };
 let officer = JSON.parse(localStorage.getItem('officer') || 'null'); // {imei,name}
@@ -137,7 +139,7 @@ async function flushQueue() {
   const keep = [];
   for (const item of a) {
     try {
-      const r = await fetch(API + '/api/checkin', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(item) });
+      const r = await api('/api/checkin', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(item), timeout: 40000 });
       if (!r.ok) throw new Error('http ' + r.status);
     } catch (e) { keep.push(item); }
   }
@@ -153,14 +155,14 @@ function updateQueueBanner() {
 
 // ---- data ----
 async function loadOfficers() {
-  const r = await fetch(API + '/api/app/officers'); const j = await r.json();
+  const r = await api('/api/app/officers'); const j = await r.json();
   const sel = $('officerSel'); sel.innerHTML = '';
   for (const o of j.officers) { const opt = document.createElement('option'); opt.value = o.imei; opt.textContent = o.name; sel.appendChild(opt); }
 }
 async function loadList() {
   $('listBody').innerHTML = '<div class="mut">Loading…</div>';
   try {
-    const r = await fetch(API + '/api/app/followlist?imei=' + encodeURIComponent(officer.imei));
+    const r = await api('/api/app/followlist?imei=' + encodeURIComponent(officer.imei));
     const j = await r.json();
     $('listTitle').textContent = `${j.items.filter(i=>!i.visited).length} to visit`;
     const body = $('listBody'); body.innerHTML = '';
@@ -202,7 +204,7 @@ $('sendBtn').onclick = async () => {
   const item = { officerImei: officer.imei, plate: current.plate, name: current.name || current.enteredName,
     lat: pos?.lat ?? null, lng: pos?.lng ?? null, ts: Math.floor(Date.now()/1000), photo: photoData, mime: 'image/jpeg' };
   try {
-    const r = await fetch(API + '/api/checkin', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(item) });
+    const r = await api('/api/checkin', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(item), timeout: 40000 });
     if (!r.ok) throw new Error('http ' + r.status);
     toast('✓ Checked in: ' + item.name);
   } catch (e) {
@@ -224,12 +226,15 @@ $('backBtn').onclick = () => show('listView');
 $('who').onclick = () => { if (confirm('Switch officer?')) { localStorage.removeItem('officer'); location.reload(); } };
 
 // ---- boot ----
+// Draw the UI FIRST, then load data in the background — so a slow/failed request can
+// never leave the screen blank.
 window.addEventListener('online', flushQueue);
-(async () => {
-  updateQueueBanner(); flushQueue();
-  try { await loadOfficers(); } catch { $('netBanner').textContent = 'No connection to server — check internet'; $('netBanner').classList.remove('hide'); }
+(function boot() {
+  updateQueueBanner();
   if (officer) { $('who').textContent = officer.name; show('listView'); loadList(); }
   else show('pickView');
+  loadOfficers().catch(() => { $('netBanner').textContent = 'No connection to server — check internet, then reopen the app'; $('netBanner').classList.remove('hide'); });
+  flushQueue().catch(() => {});
 })();
 </script>
 </body>

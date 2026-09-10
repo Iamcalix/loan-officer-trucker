@@ -1,0 +1,236 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
+<title>Elegansky Field Check-in</title>
+<style>
+  :root{--bg:#0f172a;--card:#1e293b;--mut:#94a3b8;--fg:#e2e8f0;--acc:#22c55e;--warn:#f59e0b;--bad:#ef4444;--line:#334155}
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  body{margin:0;font-family:system-ui,-apple-system,Roboto,sans-serif;background:var(--bg);color:var(--fg);padding-top:env(safe-area-inset-top)}
+  header{position:sticky;top:0;background:#0b1220;border-bottom:1px solid var(--line);padding:12px 14px;display:flex;align-items:center;gap:10px;z-index:5}
+  header .t{font-weight:700;font-size:16px}
+  header .who{margin-left:auto;font-size:12px;color:var(--mut)}
+  .wrap{padding:12px 14px 90px;max-width:640px;margin:0 auto}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px;margin-bottom:10px}
+  button{font:inherit;border:0;border-radius:10px;padding:12px 14px;background:var(--acc);color:#04240f;font-weight:700}
+  button.sec{background:#334155;color:var(--fg)} button.ghost{background:transparent;border:1px solid var(--line);color:var(--fg)}
+  button:disabled{opacity:.5}
+  .row{display:flex;align-items:center;gap:10px}
+  .cust{display:flex;align-items:center;gap:10px;padding:12px;border:1px solid var(--line);border-radius:12px;margin-bottom:8px;background:var(--card)}
+  .cust .nm{font-weight:600} .cust .pl{font-size:12px;color:var(--mut)}
+  .cust .grow{flex:1;min-width:0}
+  .pill{font-size:11px;padding:3px 8px;border-radius:999px;white-space:nowrap}
+  .pill.done{background:#052e16;color:#86efac} .pill.pend{background:#3f2d0a;color:#fcd34d}
+  .big{font-size:20px;font-weight:700;margin:2px 0 10px}
+  .mut{color:var(--mut);font-size:13px}
+  select,input{width:100%;padding:12px;border-radius:10px;border:1px solid var(--line);background:#0b1220;color:var(--fg);font:inherit}
+  .banner{padding:8px 10px;border-radius:8px;font-size:12px;margin-bottom:10px}
+  .banner.warn{background:#422006;border:1px solid #a16207;color:#fde68a}
+  .banner.ok{background:#052e16;border:1px solid #166534;color:#86efac}
+  .fab{position:fixed;left:0;right:0;bottom:0;padding:10px 14px calc(10px + env(safe-area-inset-bottom));background:#0b1220;border-top:1px solid var(--line)}
+  .hide{display:none}
+  .toast{position:fixed;left:50%;bottom:90px;transform:translateX(-50%);background:#111827;border:1px solid var(--line);padding:10px 14px;border-radius:10px;font-size:13px;max-width:90%;z-index:20}
+  img.preview{width:100%;border-radius:10px;border:1px solid var(--line);margin-top:8px}
+  .spin{display:inline-block;width:14px;height:14px;border:2px solid #ffffff55;border-top-color:#fff;border-radius:50%;animation:s .8s linear infinite;vertical-align:-2px}
+  @keyframes s{to{transform:rotate(360deg)}}
+</style>
+</head>
+<body>
+<header>
+  <div class="t">📷 Field Check-in</div>
+  <div class="who" id="who"></div>
+</header>
+<div class="wrap">
+  <div id="netBanner" class="banner warn hide"></div>
+
+  <!-- Officer picker -->
+  <section id="pickView" class="hide">
+    <div class="big">Who are you?</div>
+    <div class="card">
+      <div class="mut" style="margin-bottom:8px">Select your name — remembered on this phone.</div>
+      <select id="officerSel"></select>
+      <div style="height:10px"></div>
+      <button id="officerGo" style="width:100%">Continue</button>
+    </div>
+  </section>
+
+  <!-- Follow-list -->
+  <section id="listView" class="hide">
+    <div class="row" style="margin-bottom:8px">
+      <div class="big" id="listTitle" style="margin:0">Today's customers</div>
+      <button class="ghost" id="refreshBtn" style="margin-left:auto;padding:8px 10px">↻</button>
+    </div>
+    <div id="queueBanner" class="banner ok hide"></div>
+    <div id="listBody"></div>
+  </section>
+
+  <!-- Capture -->
+  <section id="capView" class="hide">
+    <button class="ghost" id="backBtn" style="padding:8px 12px;margin-bottom:10px">← Back</button>
+    <div class="card">
+      <div class="nm big" id="capName" style="margin:0"></div>
+      <div class="pl mut" id="capPlate"></div>
+      <div id="gpsLine" class="mut" style="margin-top:8px">📍 getting location…</div>
+      <img id="preview" class="preview hide">
+      <input type="file" id="camInput" accept="image/*" capture="environment" class="hide">
+      <div style="height:12px"></div>
+      <button id="snapBtn" style="width:100%">📷 Take photo of plate</button>
+      <div style="height:8px"></div>
+      <button id="sendBtn" class="sec hide" style="width:100%">Upload check-in</button>
+    </div>
+  </section>
+</div>
+<div id="toast" class="toast hide"></div>
+
+<script>
+const API = localStorage.getItem('apiBase') || 'https://tracker.eleganskyfinance.com';
+const $ = (id) => document.getElementById(id);
+const show = (id) => { for (const s of ['pickView','listView','capView']) $(s).classList.toggle('hide', s !== id); };
+const toast = (m) => { const t=$('toast'); t.textContent=m; t.classList.remove('hide'); clearTimeout(t._t); t._t=setTimeout(()=>t.classList.add('hide'),2600); };
+let officer = JSON.parse(localStorage.getItem('officer') || 'null'); // {imei,name}
+let current = null;   // customer being captured
+let photoData = null; // dataURL
+let pos = null;       // {lat,lng}
+
+// ---- Capacitor bridge (native) with browser fallbacks ----
+const Cap = window.Capacitor;
+async function getPosition() {
+  try {
+    if (Cap?.Plugins?.Geolocation) {
+      const p = await Cap.Plugins.Geolocation.getCurrentPosition({ enableHighAccuracy: true, timeout: 15000 });
+      return { lat: p.coords.latitude, lng: p.coords.longitude, acc: p.coords.accuracy };
+    }
+  } catch (e) { /* fall through */ }
+  return await new Promise((res, rej) => {
+    if (!navigator.geolocation) return rej(new Error('no geolocation'));
+    navigator.geolocation.getCurrentPosition(
+      (p) => res({ lat: p.coords.latitude, lng: p.coords.longitude, acc: p.coords.accuracy }),
+      (e) => rej(e), { enableHighAccuracy: true, timeout: 15000, maximumAge: 10000 });
+  });
+}
+
+// Downscale + compress a dataURL to keep uploads small (~1024px, JPEG q0.6).
+function compress(dataUrl) {
+  return new Promise((res) => {
+    const img = new Image();
+    img.onload = () => {
+      const max = 1024, scale = Math.min(1, max / Math.max(img.width, img.height));
+      const c = document.createElement('canvas');
+      c.width = Math.round(img.width * scale); c.height = Math.round(img.height * scale);
+      c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+      res(c.toDataURL('image/jpeg', 0.6));
+    };
+    img.onerror = () => res(dataUrl);
+    img.src = dataUrl;
+  });
+}
+
+// ---- offline queue ----
+const Q = {
+  all: () => JSON.parse(localStorage.getItem('queue') || '[]'),
+  set: (a) => localStorage.setItem('queue', JSON.stringify(a)),
+  add: (item) => { const a = Q.all(); a.push(item); Q.set(a); },
+};
+async function flushQueue() {
+  let a = Q.all(); if (!a.length) return;
+  const keep = [];
+  for (const item of a) {
+    try {
+      const r = await fetch(API + '/api/checkin', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(item) });
+      if (!r.ok) throw new Error('http ' + r.status);
+    } catch (e) { keep.push(item); }
+  }
+  Q.set(keep);
+  updateQueueBanner();
+}
+function updateQueueBanner() {
+  const n = Q.all().length;
+  const b = $('queueBanner');
+  if (n) { b.textContent = `⏳ ${n} check-in${n>1?'s':''} waiting to upload — will send when online`; b.classList.remove('hide'); }
+  else b.classList.add('hide');
+}
+
+// ---- data ----
+async function loadOfficers() {
+  const r = await fetch(API + '/api/app/officers'); const j = await r.json();
+  const sel = $('officerSel'); sel.innerHTML = '';
+  for (const o of j.officers) { const opt = document.createElement('option'); opt.value = o.imei; opt.textContent = o.name; sel.appendChild(opt); }
+}
+async function loadList() {
+  $('listBody').innerHTML = '<div class="mut">Loading…</div>';
+  try {
+    const r = await fetch(API + '/api/app/followlist?imei=' + encodeURIComponent(officer.imei));
+    const j = await r.json();
+    $('listTitle').textContent = `${j.items.filter(i=>!i.visited).length} to visit`;
+    const body = $('listBody'); body.innerHTML = '';
+    if (!j.items.length) { body.innerHTML = '<div class="mut">No follow-list assigned today.</div>'; return; }
+    for (const it of j.items) {
+      const d = document.createElement('div'); d.className = 'cust';
+      d.innerHTML = `<div class="grow"><div class="nm">${it.name || it.enteredName}</div><div class="pl">${it.plate || 'no plate'}</div></div>
+        <span class="pill ${it.visited?'done':'pend'}">${it.visited?'✓ visited':'pending'}</span>`;
+      if (it.plate) d.onclick = () => openCapture(it);
+      else { d.style.opacity = .5; }
+      body.appendChild(d);
+    }
+  } catch (e) { $('listBody').innerHTML = '<div class="mut">Couldn\'t load — check connection and tap ↻</div>'; }
+}
+
+function openCapture(it) {
+  current = it; photoData = null; pos = null;
+  $('capName').textContent = it.name || it.enteredName;
+  $('capPlate').textContent = it.plate;
+  $('preview').classList.add('hide'); $('sendBtn').classList.add('hide');
+  $('gpsLine').textContent = '📍 getting location…';
+  show('capView');
+  getPosition().then(p => { pos = p; $('gpsLine').textContent = `📍 location locked (±${Math.round(p.acc||0)}m)`; })
+    .catch(() => { $('gpsLine').textContent = '📍 location unavailable — enable GPS'; });
+}
+
+$('camInput').onchange = async (e) => {
+  const f = e.target.files[0]; if (!f) return;
+  const raw = await new Promise(res => { const fr = new FileReader(); fr.onload = () => res(fr.result); fr.readAsDataURL(f); });
+  photoData = await compress(raw);
+  const img = $('preview'); img.src = photoData; img.classList.remove('hide');
+  $('sendBtn').classList.remove('hide');
+};
+$('snapBtn').onclick = () => $('camInput').click();
+
+$('sendBtn').onclick = async () => {
+  if (!photoData) return toast('Take a photo first');
+  const btn = $('sendBtn'); btn.disabled = true; btn.innerHTML = '<span class="spin"></span> uploading…';
+  const item = { officerImei: officer.imei, plate: current.plate, name: current.name || current.enteredName,
+    lat: pos?.lat ?? null, lng: pos?.lng ?? null, ts: Math.floor(Date.now()/1000), photo: photoData, mime: 'image/jpeg' };
+  try {
+    const r = await fetch(API + '/api/checkin', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(item) });
+    if (!r.ok) throw new Error('http ' + r.status);
+    toast('✓ Checked in: ' + item.name);
+  } catch (e) {
+    Q.add(item); toast('Saved offline — will upload when online');
+  }
+  btn.disabled = false; btn.innerHTML = 'Upload check-in';
+  updateQueueBanner(); show('listView'); loadList();
+};
+
+$('officerGo').onclick = () => {
+  const sel = $('officerSel'); officer = { imei: sel.value, name: sel.options[sel.selectedIndex].text };
+  localStorage.setItem('officer', JSON.stringify(officer));
+  $('who').textContent = officer.name; show('listView'); loadList();
+};
+$('refreshBtn').onclick = () => { flushQueue(); loadList(); };
+$('backBtn').onclick = () => show('listView');
+
+// long-press the header to switch officer
+$('who').onclick = () => { if (confirm('Switch officer?')) { localStorage.removeItem('officer'); location.reload(); } };
+
+// ---- boot ----
+window.addEventListener('online', flushQueue);
+(async () => {
+  updateQueueBanner(); flushQueue();
+  try { await loadOfficers(); } catch { $('netBanner').textContent = 'No connection to server — check internet'; $('netBanner').classList.remove('hide'); }
+  if (officer) { $('who').textContent = officer.name; show('listView'); loadList(); }
+  else show('pickView');
+})();
+</script>
+</body>
+</html>

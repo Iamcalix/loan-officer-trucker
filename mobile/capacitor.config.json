@@ -1,0 +1,9 @@
+{
+  "appId": "com.elegansky.checkin",
+  "appName": "Elegansky Check-in",
+  "webDir": "www",
+  "plugins": {
+    "CapacitorHttp": { "enabled": true },
+    "Geolocation": {}
+  }
+}

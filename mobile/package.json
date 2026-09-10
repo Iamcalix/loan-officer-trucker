@@ -1,0 +1,14 @@
+{
+  "name": "elegansky-checkin",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Elegansky field-officer photo check-in (Capacitor Android app)",
+  "devDependencies": {
+    "@capacitor/cli": "^6.1.2"
+  },
+  "dependencies": {
+    "@capacitor/android": "^6.1.2",
+    "@capacitor/core": "^6.1.2",
+    "@capacitor/geolocation": "^6.0.1"
+  }
+}

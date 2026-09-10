@@ -417,6 +417,13 @@ const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host}`);
   const p = url.pathname;
   try {
+    // CORS for the mobile check-in app (its webview origin differs from the API host).
+    if (p.startsWith('/api/')) {
+      res.setHeader('Access-Control-Allow-Origin', '*');
+      res.setHeader('Access-Control-Allow-Headers', 'Content-Type, x-app-token');
+      res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+      if (req.method === 'OPTIONS') { res.writeHead(204); return res.end(); }
+    }
     if (p === '/api/health') return sendJson(res, 200, { ok: true, now: Math.floor(Date.now() / 1000) });
 
     if (p === '/api/officers') {

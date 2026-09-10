@@ -455,7 +455,14 @@ const server = http.createServer(async (req, res) => {
           phone: String(v?.phone || '').trim().slice(0, 30),
         };
       }
-      await saveRoster(clean);
+      // An explicit save through the UI is DELIBERATE — apply it fully (force) so
+      // assigning/reassigning/removing an officer's bike actually takes effect. The
+      // only thing we still refuse is an EMPTY payload, which would wipe the whole
+      // roster (that's the accidental case worth guarding, like the assignments guard).
+      if (!Object.keys(clean).length) {
+        return sendJson(res, 400, { error: 'no valid officers in payload — refusing to wipe the roster' });
+      }
+      await saveRoster(clean, { force: true });
       snapCache = { at: 0, data: null, promise: null }; // rebuild officers on next read
       return sendJson(res, 200, { ok: true, count: Object.keys(clean).length });
     }

@@ -12,6 +12,7 @@ import { officerFor, officerImeis, hasRoster, saveRoster, initRoster } from './o
 import { loadRegister, matchCandidates, registerSize, customerByPlate, mapDbStatus } from './register.js';
 import { saveAssignments, setAssignmentPlate, setComment, getAssignments, assignedPlatesForDay } from './assignments.js';
 import { sampleFromRows, getVisits, getExtras } from './visitlog.js';
+import { recordCheckin, getCheckins, signedPhotoUrl } from './checkins.js';
 import { officePlace, haversineM } from './places.js';
 import { analyzeTrack } from './visits.js';
 import { buildReport, writeReportFiles, listReports, eatToday } from './report.js';
@@ -299,11 +300,12 @@ async function makeReport(date) {
     if (!byOfficer.has(r.officerImei)) byOfficer.set(r.officerImei, []);
     byOfficer.get(r.officerImei).push(r);
   }
-  let [visitsByOfficer, extrasByOfficer, locs, names] = await Promise.all([
+  let [visitsByOfficer, extrasByOfficer, locs, names, checkinsByOfficer] = await Promise.all([
     getVisits(date).catch(() => null),
     getExtras(date).catch(() => new Map()),
     getLiveLocations().catch(() => []),
     getDeviceNames().catch(() => new Map()),
+    getCheckins(date).catch(() => new Map()),
   ]);
   // A transient/partial Supabase read must NEVER reduce the day's visits — that flashes
   // customers back to "not visited" (SHAFII seen dropping 8→4). Within a day visits ONLY
@@ -353,7 +355,7 @@ async function makeReport(date) {
       if (s && (s.online === false || (s.ageSec != null && s.ageSec > fixWindowMs / 1000))) officerOffline.add(im);
     }
   }
-  return buildReport(gps, date, byOfficer, visitsByOfficer, extrasByOfficer, onlinePlates, officerOffline);
+  return buildReport(gps, date, byOfficer, visitsByOfficer, extrasByOfficer, onlinePlates, officerOffline, checkinsByOfficer);
 }
 
 // -------------------------------- routing ------------------------------------
@@ -365,7 +367,7 @@ const MIME = {
 function readBody(req) {
   return new Promise((resolve, reject) => {
     let b = '';
-    req.on('data', (c) => { b += c; if (b.length > 2_000_000) reject(new Error('body too large')); });
+    req.on('data', (c) => { b += c; if (b.length > 8_000_000) reject(new Error('body too large')); });
     req.on('end', () => resolve(b));
     req.on('error', reject);
   });
@@ -465,6 +467,63 @@ const server = http.createServer(async (req, res) => {
       await saveRoster(clean, { force: true });
       snapCache = { at: 0, data: null, promise: null }; // rebuild officers on next read
       return sendJson(res, 200, { ok: true, count: Object.keys(clean).length });
+    }
+
+    // ---- Mobile check-in app endpoints ----
+    // Officer picker for the app: [{ imei, name }].
+    if (p === '/api/app/officers' && req.method === 'GET') {
+      const list = [...officerImeis()].map((imei) => ({ imei, name: officerFor(imei)?.name || imei }))
+        .sort((a, b) => String(a.name).localeCompare(String(b.name)));
+      return sendJson(res, 200, { officers: list });
+    }
+
+    // An officer's follow-list for a day → what the app shows to tap-and-photograph.
+    // Includes whether each is already visited so the officer knows what's left.
+    if (p === '/api/app/followlist' && req.method === 'GET') {
+      const imei = String(url.searchParams.get('imei') || '');
+      const day = url.searchParams.get('day') || eatToday();
+      if (!/^\d{6,}$/.test(imei)) return sendJson(res, 400, { error: 'imei required' });
+      const rows = (await getAssignments(day).catch(() => [])).filter((r) => r.officerImei === imei);
+      const visits = (await getVisits(day).catch(() => new Map())).get(imei) || [];
+      const visited = new Set(visits.map((v) => normPlate(v.plate || v.name)));
+      const items = rows.map((r) => ({
+        name: r.name, enteredName: r.enteredName, plate: r.plate || null, matched: r.matched,
+        visited: r.plate ? visited.has(normPlate(r.plate)) : false,
+      })).sort((a, b) => Number(a.visited) - Number(b.visited) || String(a.name).localeCompare(String(b.name)));
+      return sendJson(res, 200, { day, imei, name: officerFor(imei)?.name || imei, items });
+    }
+
+    // View a check-in photo — redirects to a short-lived signed Storage URL (bucket
+    // is private). Used by the report's 📷 links.
+    if (p === '/api/checkin/photo' && req.method === 'GET') {
+      const photoPath = url.searchParams.get('path') || '';
+      if (!photoPath) return sendJson(res, 400, { error: 'path required' });
+      const signed = await signedPhotoUrl(photoPath).catch(() => null);
+      if (!signed) return sendJson(res, 404, { error: 'not found' });
+      res.writeHead(302, { Location: signed });
+      return res.end();
+    }
+
+    // The check-in itself: photo + plate + phone GPS + time → stored, counts as visited.
+    // Body: { officerImei, plate, name, lat, lng, ts, photo(base64), mime }.
+    if (p === '/api/checkin' && req.method === 'POST') {
+      if (config.appToken && req.headers['x-app-token'] !== config.appToken) {
+        return sendJson(res, 401, { error: 'unauthorized' });
+      }
+      const body = await readBody(req).catch(() => null);
+      if (body == null) return sendJson(res, 413, { error: 'photo too large' });
+      let d; try { d = JSON.parse(body || '{}'); } catch { return sendJson(res, 400, { error: 'invalid JSON' }); }
+      if (!/^\d{6,}$/.test(String(d.officerImei || ''))) return sendJson(res, 400, { error: 'officerImei required' });
+      if (!d.plate) return sendJson(res, 400, { error: 'plate required' });
+      let photoBuf = null;
+      if (d.photo) { try { photoBuf = Buffer.from(String(d.photo).replace(/^data:[^,]*,/, ''), 'base64'); } catch { /* ignore */ } }
+      try {
+        const r = await recordCheckin({ officerImei: String(d.officerImei), plate: d.plate, name: d.name, lat: d.lat, lng: d.lng, ts: d.ts, photoBuf, mime: d.mime });
+        snapCache = { at: 0, data: null, promise: null };
+        return sendJson(res, 200, r);
+      } catch (e) {
+        return sendJson(res, 500, { error: String(e.message || e).slice(0, 200) });
+      }
     }
 
     if (p === '/api/customers') {

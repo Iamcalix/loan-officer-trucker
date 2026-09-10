@@ -23,7 +23,7 @@ const normPlate = (s) => String(s || '').toUpperCase().replace(/[^A-Z0-9]/g, '')
 
 // Cross-reference an agent's assigned follow-list against the customers they were
 // actually logged with → visited (with duration) vs. not visited.
-function assignedSummary(items, visits, onlinePlates) {
+function assignedSummary(items, visits, onlinePlates, checkins) {
   const byPlate = new Map();
   for (const v of visits) {
     const p = normPlate(v.plate || v.name);
@@ -39,10 +39,13 @@ function assignedSummary(items, visits, onlinePlates) {
     const visited = Boolean(hit);
     // Not GPS-visited AND the customer's bike isn't reporting → can't verify (not a miss).
     const gpsOffline = !visited && onlinePlates ? !onlinePlates.has(p) : false;
+    // Photo check-in from the officer's phone — proof of visit where GPS couldn't confirm.
+    const chk = checkins ? checkins.get(p) : null;
     return {
       name: it.name, plate: it.plate || null, matched: Boolean(it.matched),
       visited, gpsOffline, minutes: hit ? hit.minutes : 0, stops: hit ? hit.stops : [],
-      lat: hit ? hit.lat : null, lng: hit ? hit.lng : null,
+      lat: hit ? hit.lat : (chk ? chk.lat : null), lng: hit ? hit.lng : (chk ? chk.lng : null),
+      photo: chk ? true : false, photoPath: chk ? chk.photoPath : null, photoTs: chk ? chk.ts : null,
       enteredName: it.enteredName, comment: it.comment || '',
     };
   });
@@ -59,13 +62,13 @@ function assignedSummary(items, visits, onlinePlates) {
 // Build the per-agent follow-list report for a date. `assignmentsByOfficer` maps
 // officerImei -> assignment items; `visitsByOfficer` maps officerImei -> logged
 // visits. (gps is unused now — kept for a stable call signature.)
-export async function buildReport(gps, date = eatToday(), assignmentsByOfficer = new Map(), visitsByOfficer = new Map(), extrasByOfficer = new Map(), onlinePlates = null, officerOffline = null) {
+export async function buildReport(gps, date = eatToday(), assignmentsByOfficer = new Map(), visitsByOfficer = new Map(), extrasByOfficer = new Map(), onlinePlates = null, officerOffline = null, checkinsByOfficer = new Map()) {
   const officers = [...officerImeis()].map((imei) => {
     const o = officerFor(imei);
     const items = assignmentsByOfficer.get(imei) || [];
     const visits = visitsByOfficer.get(imei) || [];
     const ex = extrasByOfficer.get(imei) || {};
-    const assigned = items.length ? assignedSummary(items, visits, onlinePlates) : null;
+    const assigned = items.length ? assignedSummary(items, visits, onlinePlates, checkinsByOfficer.get(imei) || null) : null;
     // First ASSIGNED customer reached today (consistent with the visited count).
     let firstCustomerTs = null;
     if (assigned) {
@@ -163,9 +166,12 @@ function officerBlock(o) {
     </div>`;
     h += `<table><tr><th>Customer</th><th>Status</th><th>Time with them</th><th>When</th><th>Where</th><th>Note</th></tr>`;
     for (const i of visited) {
-      const where = Number.isFinite(i.lat) ? `<a href="https://www.google.com/maps?q=${i.lat},${i.lng}" target="_blank">map</a>` : '—';
-      h += `<tr><td>${esc(i.name)}</td><td><span class="tag t-customer">Visited</span></td>
-        <td><b>${dur(i.minutes)}</b></td><td class="muted">${i.stops.map((s) => hm(s.start) + '–' + hm(s.end)).join(', ')}</td><td>${where}</td><td>${esc(i.comment)}</td></tr>`;
+      const photo = i.photo && i.photoPath ? ` <a href="/api/checkin/photo?path=${encodeURIComponent(i.photoPath)}" target="_blank">📷</a>` : '';
+      const tag = i.photo && i.minutes < 1 ? 'Visited (photo)' : 'Visited';
+      const where = Number.isFinite(i.lat) ? `<a href="https://www.google.com/maps?q=${i.lat},${i.lng}" target="_blank">map</a>${photo}` : (photo || '—');
+      const when = i.stops.length ? i.stops.map((s) => hm(s.start) + '–' + hm(s.end)).join(', ') : (i.photoTs ? hm(i.photoTs) : '');
+      h += `<tr><td>${esc(i.name)}</td><td><span class="tag t-customer">${tag}</span></td>
+        <td><b>${i.minutes ? dur(i.minutes) : '—'}</b></td><td class="muted">${when}</td><td>${where}</td><td>${esc(i.comment)}</td></tr>`;
     }
     for (const i of notVisited) {
       const tag = o.trackerOffline

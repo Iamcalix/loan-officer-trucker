@@ -86,6 +86,9 @@ export const config = {
   // this, sampling only happened on dashboard views and visits during unwatched
   // periods were silently lost (officers appeared to meet far fewer customers).
   sampleIntervalMs: num(process.env.SAMPLE_INTERVAL_MS, 45000),
+  // Optional shared secret the mobile check-in app must send (x-app-token header).
+  // Unset → the check-in endpoint is open (fine for an internal field tool).
+  appToken: process.env.APP_TOKEN || '',
 
   // The office. When an officer's fix is within radius of this point they are
   // shown "At office". Leave lat/lng unset to disable.

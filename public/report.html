@@ -133,9 +133,12 @@ function render(j) {
         </div>`;
       html += `<table><tr><th>Customer</th><th>Status</th><th>Time with them</th><th>When</th><th>Where</th><th>Note</th></tr>`;
       for (const i of visited) {
-        const where = isFinite(i.lat) ? `<a href="https://www.google.com/maps?q=${i.lat},${i.lng}" target="_blank">map</a>` : '—';
-        html += `<tr><td>${i.name}</td><td><span class="tag t-customer">Visited</span></td>
-          <td><b>${dur(i.minutes)}</b></td><td class="muted">${i.stops.map((s) => hm(s.start) + '–' + hm(s.end)).join(', ')}</td><td>${where}</td>${noteCell(o.imei, i)}</tr>`;
+        const photo = i.photo && i.photoPath ? ` <a href="/api/checkin/photo?path=${encodeURIComponent(i.photoPath)}" target="_blank">📷</a>` : '';
+        const tag = i.photo && i.minutes < 1 ? 'Visited (photo)' : 'Visited';
+        const where = isFinite(i.lat) ? `<a href="https://www.google.com/maps?q=${i.lat},${i.lng}" target="_blank">map</a>${photo}` : (photo || '—');
+        const when = (i.stops && i.stops.length) ? i.stops.map((s) => hm(s.start) + '–' + hm(s.end)).join(', ') : (i.photoTs ? hm(i.photoTs) : '');
+        html += `<tr><td>${i.name}</td><td><span class="tag t-customer">${tag}</span></td>
+          <td><b>${i.minutes ? dur(i.minutes) : '—'}</b></td><td class="muted">${when}</td><td>${where}</td>${noteCell(o.imei, i)}</tr>`;
       }
       for (const i of notVisited) {
         const tag = o.trackerOffline

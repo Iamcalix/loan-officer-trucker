@@ -153,7 +153,11 @@ function assignedInRangeFor(officerPos, customerBikes, assignedSet) {
   const out = [];
   for (const c of customerBikes) {
     if (!assignedSet.has(c.plate)) continue;
-    if (c.ageSec == null || c.ageSec > maxAge) continue; // position not current → can't confirm presence
+    // Exclude only bikes we KNOW are stale (a real old timestamp beyond the window) —
+    // those are "ghost" positions. A NULL age means no timestamp, which is normal for
+    // Wanway units reporting a CURRENT position; treat those as present, or officers
+    // standing right next to such a bike never get credited (RAJABU: 7-8m misses).
+    if (c.ageSec != null && c.ageSec > maxAge) continue;
     const d = haversineM(officerPos, c);
     if (d <= R) out.push({ plate: c.plate, name: c.name, custSpeed: c.speed, distM: Math.round(d) });
   }

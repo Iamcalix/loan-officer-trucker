@@ -8,3 +8,4 @@ reports/
 mobile/node_modules/
 mobile/android/
 mobile/.gradle/
+.github/workflows/android.yml

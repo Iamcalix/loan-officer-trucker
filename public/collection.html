@@ -59,10 +59,9 @@ async function load(date) {
   try { j = await (await fetch('/api/collection' + q)).json(); } catch(e){ document.getElementById('msg').textContent='Failed to load'; return; }
   if (j.error) { document.getElementById('msg').textContent = 'ERP source error: ' + j.error; return; }
   const asof = document.getElementById('asof');
-  asof.innerHTML = j.asOf
-    ? (`overdue as of <b>${j.asOf}</b> · payments as of <b>${j.payAsOf || '—'}</b>`
-      + ((j.stale || j.payStale) ? ' <span class="stale">— ERP feed is behind; refresh it for live daily numbers</span>' : ''))
-    : 'no ERP data';
+  asof.innerHTML = `collection: <b>${j.payLive ? 'LIVE from payments sheet' : 'off'}</b>`
+    + ` · overdue as of <b>${j.asOf || '—'}</b>`
+    + (j.stale ? ' <span class="stale">— overdue is stale (pasted amounts / ERP feed needed)</span>' : '');
   if (j.date && !date) document.getElementById('date').value = j.asOf;
   const body = document.getElementById('body'); body.innerHTML='';
   const row = (r, cls) => `<tr class="${cls||''}">

@@ -90,6 +90,21 @@ export const config = {
   // Unset → the check-in endpoint is open (fine for an internal field tool).
   appToken: process.env.APP_TOKEN || '',
 
+  // Live bank-payments Google Sheet (the same one smart-collector polls) — the
+  // current "customer paid" source for the collection report. PASSED tab, columns
+  // 0-based: date B(1) "DD.MM.YYYY", amount E(4), plate F(5). Read-only via a
+  // service account (GOOGLE_SA_JSON inline).
+  paysheet: {
+    saJson: process.env.GOOGLE_SA_JSON || '',
+    sheetId: process.env.PAYMENTS_SHEET_ID || '',
+    tab: process.env.PAYMENTS_TAB || 'PASSED',
+    col: {
+      date: num(process.env.PAYMENTS_COL_DATE, 1),
+      amount: num(process.env.PAYMENTS_COL_AMOUNT, 4),
+      plate: num(process.env.PAYMENTS_COL_PLATE, 5),
+    },
+  },
+
   // The office. When an officer's fix is within radius of this point they are
   // shown "At office". Leave lat/lng unset to disable.
   office: {

@@ -16,6 +16,7 @@
 import { config } from './config.js';
 import { officerImeis, officerFor } from './officers.js';
 import { getAssignments } from './assignments.js';
+import { paymentsByPlate, paysheetEnabled } from './paysheet.js';
 
 const num = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
 const normName = (s) => String(s || '').toUpperCase().replace(/[^A-Z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
@@ -47,27 +48,12 @@ async function loadArrears() {
   return { asOf: snap?.as_of || null, byName, byId, idName };
 }
 
-// Today's posted payments per customer NAME (via the arrears id→name bridge). Stale
-// until the ERP payment mirror runs again — returns an empty map then.
-async function loadPaidByName(idName, day) {
-  const paidName = new Map();
-  try {
-    const pays = await erp(`qb_payments?txn_date=eq.${day}&select=customer_id,total_amt`);
-    for (const p of pays) {
-      const nm = idName.get(String(p.customer_id));
-      if (nm) paidName.set(nm, (paidName.get(nm) || 0) + num(p.total_amt));
-    }
-  } catch { /* payment mirror unreachable/stale */ }
-  return paidName;
-}
-
 export async function buildCollection(date) {
   const day = date || new Date(Date.now() + 3 * 3600 * 1000).toISOString().slice(0, 10);
-  const { asOf, byName, idName } = await loadArrears();
-  // Collection = ERP payments posted on `day` by the assigned customers, joined to
-  // their names via the arrears id→name bridge.
-  const paidName = await loadPaidByName(idName, day);
-  const payAsOf = await latestPaymentDate();
+  // Open (overdue) — from the pasted follow-list amount if present, else ERP arrears
+  // (stale). Collection — LIVE from the bank-payments sheet, matched by PLATE.
+  const { asOf, byName } = await loadArrears();
+  const paidByPlate = await paymentsByPlate(date).catch(() => new Map());
 
   const assignments = await getAssignments(day).catch(() => []);
   const byOfficer = new Map();
@@ -80,33 +66,26 @@ export async function buildCollection(date) {
   for (const imei of officerImeis()) {
     const items = byOfficer.get(imei) || [];
     if (!items.length) continue;
-    let open = 0, collection = 0, matched = 0;
+    let open = 0, collection = 0, matched = 0, paidCount = 0;
     for (const it of items) {
-      const nm = normName(it.name || it.enteredName);
-      const ov = byName.get(nm);
-      if (ov != null) { open += ov; matched += 1; }
-      const pd = paidName.get(nm);
-      if (pd != null) collection += pd;
+      // Open: pasted amount on the assignment (its overdue) if we have it, else ERP.
+      const amt = Number(it.amount) > 0 ? Number(it.amount) : (byName.get(normName(it.name || it.enteredName)) || 0);
+      if (amt > 0) { open += amt; matched += 1; }
+      // Collection: today's payment for this plate from the live sheet.
+      const pd = it.plate ? paidByPlate.get(normPlate(it.plate)) : 0;
+      if (pd) { collection += pd; paidCount += 1; }
     }
     const remain = open - collection;
     officers.push({
       officer: officerFor(imei)?.name || imei,
-      boda: items.length, matched, open, collection, remain,
+      boda: items.length, matched, paidCount, open, collection, remain,
       pct: open > 0 ? (collection / open) * 100 : 0,
       status: open > 0 && remain <= 0 ? 'GOOD' : 'BAD',
     });
   }
   officers.sort((a, b) => b.open - a.open);
 
-  return { asOf, day, payAsOf, officers, total: total(officers), stale: asOf !== day, payStale: payAsOf !== day };
-}
-
-// Freshest payment date in the ERP mirror — to show whether "Collection" is current.
-async function latestPaymentDate() {
-  try {
-    const r = await erp('qb_payments?select=txn_date&order=txn_date.desc&limit=1');
-    return r[0]?.txn_date || null;
-  } catch { return null; }
+  return { asOf, day, officers, total: total(officers), stale: asOf !== day, payLive: paysheetEnabled() };
 }
 
 function total(list) {

@@ -39,7 +39,7 @@
 </div>
 <div class="wrap"><div id="msg">Loading…</div><table id="tbl" style="display:none">
   <thead><tr>
-    <th>Loan Officer</th><th>Book</th><th class="num">Open Amount</th><th class="num">N. Boda</th>
+    <th>Field Officer</th><th class="num">N. Boda</th><th class="num">Open Amount</th>
     <th class="num">Collection (posted)</th><th class="num">Remain</th><th class="num">% Coll</th><th>Status</th>
   </tr></thead>
   <tbody id="body"></tbody>
@@ -59,19 +59,20 @@ async function load(date) {
   try { j = await (await fetch('/api/collection' + q)).json(); } catch(e){ document.getElementById('msg').textContent='Failed to load'; return; }
   if (j.error) { document.getElementById('msg').textContent = 'ERP source error: ' + j.error; return; }
   const asof = document.getElementById('asof');
-  asof.innerHTML = j.asOf ? (`as of <b>${j.asOf}</b>` + (j.stale ? ' <span class="stale">— snapshot is not today; ERP feed needs refreshing for live numbers</span>' : '')) : 'no data';
+  asof.innerHTML = j.asOf
+    ? (`overdue as of <b>${j.asOf}</b> · payments as of <b>${j.payAsOf || '—'}</b>`
+      + ((j.stale || j.payStale) ? ' <span class="stale">— ERP feed is behind; refresh it for live daily numbers</span>' : ''))
+    : 'no ERP data';
   if (j.date && !date) document.getElementById('date').value = j.asOf;
   const body = document.getElementById('body'); body.innerHTML='';
   const row = (r, cls) => `<tr class="${cls||''}">
-    <td>${r.officer||r.label}</td><td class="muted">${r.book||''}</td>
-    <td class="num">${money(r.open)}</td><td class="num">${r.boda.toLocaleString()}</td>
+    <td>${r.officer||r.label}</td><td class="num">${(r.boda||0).toLocaleString()}</td>
+    <td class="num">${money(r.open)}</td>
     <td class="num">${money(r.collection)}</td><td class="num">${remainCell(r.remain)}</td>
     <td class="num">${pct(r.pct)}</td><td>${statusCell(r.status)}</td></tr>`;
-  for (const bk of (j.books||[])) {
-    for (const o of bk.officers) body.insertAdjacentHTML('beforeend', row(o));
-    body.insertAdjacentHTML('beforeend', row({...bk.subtotal, officer: `${bk.book} book — subtotal`, book: bk.book}, 'sub'));
-  }
-  if (j.total) body.insertAdjacentHTML('beforeend', row({...j.total, officer:'TOTAL — all officers', book:''}, 'total'));
+  for (const o of (j.officers||[])) body.insertAdjacentHTML('beforeend', row(o));
+  if (j.total) body.insertAdjacentHTML('beforeend', row(j.total, 'total'));
+  if (!j.officers || !j.officers.length) body.insertAdjacentHTML('beforeend', '<tr><td colspan="7" class="muted" style="text-align:center;padding:30px">No follow-lists assigned for this day.</td></tr>');
   document.getElementById('msg').style.display='none';
   document.getElementById('tbl').style.display='table';
 }

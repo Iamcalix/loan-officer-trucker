@@ -1,24 +1,25 @@
-// Loan-officer COLLECTION report — the "open vs collected" performance table
-// (per the format ELEGANSKY uses): one row per loan officer, grouped by BOOK
-// (iPhone / Daily Loan), with book subtotals and a grand total.
+// FIELD-officer collection report — open vs collected per field officer, in the
+// ELEGANSKY format (Open Amount · N. Boda · Collection · Remain · % Coll · Status).
 //
-// Source: the ERP "session puller" Supabase `daily_officer_snapshot` (same project
-// wired in as the mapping DB). Column mapping:
-//   Open Amount  = total_invoice_amount
-//   N. Boda      = open_invoice_count
-//   Collection   = today_invoice_collection + arrear_collected   (posted payments)
-//   Remain       = Open - Collection
-//   % Coll       = Collection / Open
-//   Status       = Remain <= 0 (collected >= open) -> GOOD, else BAD
-//   Book         = iPhone if the officer/product is iPhone, else Daily Loan
+// Rows = the GPS field officers (GOOD, JUMA, RAJABU …). Each field officer's numbers
+// come from the customers on their daily follow-list:
+//   Open Amount  = Σ overdue of their assigned customers   (ERP arrears)
+//   N. Boda      = number of assigned customers
+//   Collection   = Σ paid by their assigned customers today (ERP payments)
+//   Remain       = Open − Collection ; % Coll = Collection/Open
+//   Status       = Remain ≤ 0 → GOOD, else BAD
 //
-// NOTE: this is only as current as the ERP snapshot — the pipeline must be running
-// for live daily numbers. `asOf` is surfaced so a stale snapshot is obvious.
+// Match key: the customer NAME on the follow-list ↔ the ERP arrears customer leaf
+// (both come from the same ERP source). NOTE: numbers are only as current as the ERP
+// feed — arrears/payments must be refreshed for live daily figures (`asOf`/`stale`).
 
 import { config } from './config.js';
+import { officerImeis, officerFor } from './officers.js';
+import { getAssignments } from './assignments.js';
 
 const num = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
-const isIphone = (name) => /iphone/i.test(String(name || ''));
+const normName = (s) => String(s || '').toUpperCase().replace(/[^A-Z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
+const normPlate = (s) => String(s || '').toUpperCase().replace(/[^A-Z0-9]/g, '').replace(/([A-Z])\d+$/, '$1');
 
 async function erp(pathAndQuery) {
   const { url, key } = config.mapDb;
@@ -31,52 +32,87 @@ async function erp(pathAndQuery) {
   return r.json();
 }
 
-// Build the collection report for a date (defaults to the latest snapshot available).
-export async function buildCollection(date) {
-  let day = date;
-  if (!day) {
-    const latest = await erp('daily_officer_snapshot?select=date&order=date.desc&limit=1');
-    day = latest[0]?.date || null;
+// Per-customer overdue from the latest arrears snapshot → name→overdue, id→overdue,
+// id→name (for joining payments back to a name).
+async function loadArrears() {
+  const snap = (await erp('arrears_snapshots?select=as_of,data&order=as_of.desc&limit=1'))[0];
+  const byName = new Map(), byId = new Map(), idName = new Map();
+  for (const r of (snap?.data || [])) {
+    if (String(r.status).toLowerCase() !== 'overdue') continue;
+    const leaf = normName(r.customerLeaf || String(r.customer || '').split(':').pop());
+    const bal = num(r.balance);
+    if (leaf) byName.set(leaf, (byName.get(leaf) || 0) + bal);
+    if (r.customerId != null) { byId.set(String(r.customerId), (byId.get(String(r.customerId)) || 0) + bal); idName.set(String(r.customerId), leaf); }
   }
-  if (!day) return { asOf: null, books: [], total: null, stale: true };
-
-  const rows = await erp(`daily_officer_snapshot?date=eq.${day}&select=officer_name,total_invoice_amount,open_invoice_count,today_invoice_collection,arrear_collected&order=total_invoice_amount.desc`);
-
-  const mk = (r) => {
-    const open = num(r.total_invoice_amount);
-    const collection = num(r.today_invoice_collection) + num(r.arrear_collected);
-    const remain = open - collection;
-    return {
-      officer: r.officer_name || '(unnamed)',
-      book: isIphone(r.officer_name) ? 'iPhone' : 'Daily Loan',
-      open, boda: num(r.open_invoice_count), collection, remain,
-      pct: open > 0 ? (collection / open) * 100 : 0,
-      status: remain <= 0 && open > 0 ? 'GOOD' : 'BAD',
-    };
-  };
-  const officers = rows.map(mk);
-
-  // Group into books, each with a subtotal; then a grand total.
-  const order = ['iPhone', 'Daily Loan'];
-  const books = [];
-  for (const b of order) {
-    const list = officers.filter((o) => o.book === b);
-    if (!list.length) continue;
-    books.push({ book: b, officers: list, subtotal: subtotal(list, b) });
-  }
-  return { asOf: day, books, total: subtotal(officers, 'ALL'), stale: isStale(day) };
+  return { asOf: snap?.as_of || null, byName, byId, idName };
 }
 
-function subtotal(list, label) {
+// Today's posted payments per customer NAME (via the arrears id→name bridge). Stale
+// until the ERP payment mirror runs again — returns an empty map then.
+async function loadPaidByName(idName, day) {
+  const paidName = new Map();
+  try {
+    const pays = await erp(`qb_payments?txn_date=eq.${day}&select=customer_id,total_amt`);
+    for (const p of pays) {
+      const nm = idName.get(String(p.customer_id));
+      if (nm) paidName.set(nm, (paidName.get(nm) || 0) + num(p.total_amt));
+    }
+  } catch { /* payment mirror unreachable/stale */ }
+  return paidName;
+}
+
+export async function buildCollection(date) {
+  const day = date || new Date(Date.now() + 3 * 3600 * 1000).toISOString().slice(0, 10);
+  const { asOf, byName, idName } = await loadArrears();
+  // Collection = ERP payments posted on `day` by the assigned customers, joined to
+  // their names via the arrears id→name bridge.
+  const paidName = await loadPaidByName(idName, day);
+  const payAsOf = await latestPaymentDate();
+
+  const assignments = await getAssignments(day).catch(() => []);
+  const byOfficer = new Map();
+  for (const a of assignments) {
+    if (!byOfficer.has(a.officerImei)) byOfficer.set(a.officerImei, []);
+    byOfficer.get(a.officerImei).push(a);
+  }
+
+  const officers = [];
+  for (const imei of officerImeis()) {
+    const items = byOfficer.get(imei) || [];
+    if (!items.length) continue;
+    let open = 0, collection = 0, matched = 0;
+    for (const it of items) {
+      const nm = normName(it.name || it.enteredName);
+      const ov = byName.get(nm);
+      if (ov != null) { open += ov; matched += 1; }
+      const pd = paidName.get(nm);
+      if (pd != null) collection += pd;
+    }
+    const remain = open - collection;
+    officers.push({
+      officer: officerFor(imei)?.name || imei,
+      boda: items.length, matched, open, collection, remain,
+      pct: open > 0 ? (collection / open) * 100 : 0,
+      status: open > 0 && remain <= 0 ? 'GOOD' : 'BAD',
+    });
+  }
+  officers.sort((a, b) => b.open - a.open);
+
+  return { asOf, day, payAsOf, officers, total: total(officers), stale: asOf !== day, payStale: payAsOf !== day };
+}
+
+// Freshest payment date in the ERP mirror — to show whether "Collection" is current.
+async function latestPaymentDate() {
+  try {
+    const r = await erp('qb_payments?select=txn_date&order=txn_date.desc&limit=1');
+    return r[0]?.txn_date || null;
+  } catch { return null; }
+}
+
+function total(list) {
   const open = list.reduce((s, o) => s + o.open, 0);
   const collection = list.reduce((s, o) => s + o.collection, 0);
   const boda = list.reduce((s, o) => s + o.boda, 0);
   const remain = open - collection;
-  return { label, open, boda, collection, remain, pct: open > 0 ? (collection / open) * 100 : 0, status: remain <= 0 && open > 0 ? 'GOOD' : 'BAD' };
-}
-
-function isStale(day) {
-  // EAT "today" vs the snapshot date — flag if the snapshot isn't from today.
-  const today = new Date(Date.now() + 3 * 3600 * 1000).toISOString().slice(0, 10);
-  return day !== today;
+  return { label: 'TOTAL — all field officers', boda, open, collection, remain, pct: open > 0 ? (collection / open) * 100 : 0, status: open > 0 && remain <= 0 ? 'GOOD' : 'BAD' };
 }

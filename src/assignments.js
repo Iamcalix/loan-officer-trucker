@@ -8,15 +8,24 @@
 import { supabaseEnabled, sb, sbSelect, sbInsert, sbDelete } from './supa.js';
 import { bestMatch, customerByPlate } from './register.js';
 
-// Pasted follow-lists often carry extra columns (name<TAB>amount<TAB>officer) or a
-// trailing amount ("SAIDI ATHUMANI ALLY 59,000.00"). Keep just the name so matching
-// isn't polluted by numbers/other fields.
-export function cleanImportedName(raw) {
+// Pasted follow-lists carry the customer's OVERDUE amount next to the name — either
+// tab-separated (name<TAB>amount<TAB>…) or trailing ("SAIDI ATHUMANI ALLY 59,000.00").
+// Split it into the clean name (for matching) AND the amount (the customer's Open /
+// overdue, used by the collection report).
+export function parseImportedRow(raw) {
   let s = String(raw || '').trim();
-  if (s.includes('\t')) s = s.split('\t')[0];       // keep the first (name) column
-  s = s.replace(/[\s,;|-]+[\d][\d.,]*\s*$/, '');     // drop a trailing amount like "59,000.00"
-  return s.trim();
+  let amount = 0;
+  if (s.includes('\t')) {
+    const parts = s.split('\t').map((x) => x.trim());
+    s = parts[0];
+    for (let i = parts.length - 1; i >= 1; i--) { const n = Number(parts[i].replace(/[^\d.]/g, '')); if (n > 0) { amount = n; break; } }
+  } else {
+    const m = s.match(/[\s,;|-]+([\d][\d.,]*)\s*$/);
+    if (m) { amount = Number(m[1].replace(/[^\d.]/g, '')) || 0; s = s.slice(0, m.index).trim(); }
+  }
+  return { name: s.trim(), amount };
 }
+export function cleanImportedName(raw) { return parseImportedRow(raw).name; }
 
 // Resolve a list of pasted names for one officer, REPLACING that officer's list
 // for the day. Returns the resolution so the UI can show matched vs unmatched.
@@ -26,15 +35,15 @@ export async function saveAssignments(day, officerImei, names) {
   const matched = [];
   const unmatched = [];
   for (const raw of names) {
-    const entered = cleanImportedName(raw);
+    const { name: entered, amount } = parseImportedRow(raw);
     if (!entered) continue;
     const dedupKey = entered.toUpperCase();
     if (seen.has(dedupKey)) continue;
     seen.add(dedupKey);
 
     const hit = bestMatch(entered);
-    rows.push({ day, officer_imei: String(officerImei), entered_name: entered.slice(0, 120), plate: hit?.plate || null, matched: Boolean(hit) });
-    if (hit) matched.push({ entered, plate: hit.plate, name: hit.name, phone: hit.phone });
+    rows.push({ day, officer_imei: String(officerImei), entered_name: entered.slice(0, 120), plate: hit?.plate || null, matched: Boolean(hit), amount: amount || null });
+    if (hit) matched.push({ entered, plate: hit.plate, name: hit.name, phone: hit.phone, amount });
     else unmatched.push(entered);
   }
 
@@ -47,7 +56,13 @@ export async function saveAssignments(day, officerImei, names) {
       return { day, officerImei, total: 0, matched, unmatched, skipped: 'empty — existing list left untouched' };
     }
     await sbDelete(`assignments?day=eq.${day}&officer_imei=eq.${encodeURIComponent(officerImei)}`);
-    await sbInsert('assignments', rows);
+    try {
+      await sbInsert('assignments', rows);
+    } catch (e) {
+      // `amount` column may not exist yet (run the ALTER once) — degrade gracefully so
+      // saving still works; amounts just won't persist until the column is added.
+      await sbInsert('assignments', rows.map(({ amount, ...r }) => r));
+    }
   }
   return { day, officerImei, total: rows.length, matched, unmatched };
 }
@@ -75,6 +90,7 @@ export async function getAssignments(day) {
       name: cust?.name || r.entered_name,
       phone: cust?.phone || '',
       comment: r.comment || '',
+      amount: r.amount != null ? Number(r.amount) : 0, // pasted overdue = Open
     };
   });
 }

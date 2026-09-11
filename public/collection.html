@@ -59,9 +59,8 @@ async function load(date) {
   try { j = await (await fetch('/api/collection' + q)).json(); } catch(e){ document.getElementById('msg').textContent='Failed to load'; return; }
   if (j.error) { document.getElementById('msg').textContent = 'ERP source error: ' + j.error; return; }
   const asof = document.getElementById('asof');
-  asof.innerHTML = `${j.day || ''} · Open = Σ follow-list overdue (ERP as of <b>${j.asOf || '—'}</b>)`
-    + ` · Collection: <b>${j.payLive ? 'LIVE (payments sheet)' : 'off'}</b>`
-    + (j.stale ? ' <span class="stale">— ERP overdue snapshot is behind</span>' : '');
+  asof.innerHTML = `${j.day || ''} · Open = Σ follow-list overdue (LIVE ERP arrears${j.asOf ? ', asOf ' + j.asOf : ''})`
+    + ` · Collection: <b>${j.payLive ? 'LIVE (payments sheet)' : 'off'}</b>`;
   if (j.date && !date) document.getElementById('date').value = j.asOf;
   const body = document.getElementById('body'); body.innerHTML='';
   const row = (r, cls) => `<tr class="${cls||''}">

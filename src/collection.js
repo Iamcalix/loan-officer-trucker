@@ -20,35 +20,36 @@ const num = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
 const normName = (s) => String(s || '').toUpperCase().replace(/[^A-Z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
 const normPlate = (s) => String(s || '').toUpperCase().replace(/[^A-Z0-9]/g, '').replace(/([A-Z])\d+$/, '$1');
 
-async function erp(pathAndQuery) {
-  const { url, key } = config.mapDb;
-  if (!url || !key) throw new Error('ERP mapping DB not configured');
-  const r = await fetch(`${url}/rest/v1/${pathAndQuery}`, {
-    headers: { apikey: key, Authorization: `Bearer ${key}` },
-    signal: AbortSignal.timeout(config.httpTimeoutMs),
-  });
-  if (!r.ok) throw new Error(`ERP ${r.status}`);
-  return r.json();
-}
-
-// Each customer's overdue from the latest ERP arrears snapshot → normName → overdue.
-async function overdueByName() {
-  const snap = (await erp('arrears_snapshots?select=as_of,data&order=as_of.desc&limit=1'))[0];
-  const byName = new Map();
-  for (const r of (snap?.data || [])) {
-    if (String(r.status).toLowerCase() !== 'overdue') continue;
-    const leaf = normName(r.customerLeaf || String(r.customer || '').split(':').pop());
-    if (leaf) byName.set(leaf, (byName.get(leaf) || 0) + num(r.balance));
+// LIVE overdue from the elegansky-brain ERP arrears API (/arrears/customer). It's on
+// Render, so it's reachable from officer-tracker (also Render) but NOT from Tanzania
+// (onrender.com SNI block). Returns one pre-aggregated row per customer with plates —
+// so we match the follow-list by PLATE (reliable), falling back to name.
+// Response: { asOf, customers: [{ customer, total_overdue, plates:[], loan_officer, full_path }] }.
+let _arr = { at: 0, byPlate: new Map(), byName: new Map(), asOf: null };
+async function loadArrearsApi() {
+  if (Date.now() - _arr.at < 5 * 60_000 && (_arr.byPlate.size || _arr.byName.size)) return _arr;
+  const r = await fetch(config.arrearsApiUrl, { signal: AbortSignal.timeout(70_000) }); // Render cold-start tolerant
+  if (!r.ok) throw new Error(`arrears API ${r.status}`);
+  const data = await r.json();
+  const byPlate = new Map(), byName = new Map();
+  for (const c of (data.customers || [])) {
+    const ov = num(c.total_overdue);
+    if (ov <= 0) continue;
+    const nm = normName(c.customer);
+    if (nm) byName.set(nm, (byName.get(nm) || 0) + ov);
+    for (const p of (c.plates || [])) { const np = normPlate(p); if (np) byPlate.set(np, (byPlate.get(np) || 0) + ov); }
   }
-  return { asOf: snap?.as_of || null, byName };
+  _arr = { at: Date.now(), byPlate, byName, asOf: data.asOf || null };
+  return _arr;
 }
 
 export async function buildCollection(date) {
   const day = date || new Date(Date.now() + 3 * 3600 * 1000).toISOString().slice(0, 10);
-  const [{ asOf, byName }, paidByPlate] = await Promise.all([
-    overdueByName().catch(() => ({ asOf: null, byName: new Map() })),
+  const [arr, paidByPlate] = await Promise.all([
+    loadArrearsApi().catch((e) => ({ byPlate: new Map(), byName: new Map(), asOf: null, error: String(e.message || e) })),
     paymentsByPlate(date).catch(() => new Map()),
   ]);
+  const asOf = arr.asOf;
 
   const assignments = await getAssignments(day).catch(() => []);
   const byOfficer = new Map();
@@ -63,7 +64,8 @@ export async function buildCollection(date) {
     if (!items.length) continue;
     let open = 0, collection = 0, matched = 0, paidCount = 0;
     for (const it of items) {
-      const ov = byName.get(normName(it.name || it.enteredName)) || 0; // ERP overdue
+      // Live overdue: match by PLATE first (the feed carries plates), else by name.
+      const ov = (it.plate ? arr.byPlate.get(normPlate(it.plate)) : 0) || arr.byName.get(normName(it.name || it.enteredName)) || 0;
       if (ov > 0) { open += ov; matched += 1; }
       const pd = it.plate ? paidByPlate.get(normPlate(it.plate)) : 0;    // live payment
       if (pd) { collection += pd; paidCount += 1; }

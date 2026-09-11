@@ -86,6 +86,11 @@ export const config = {
   // this, sampling only happened on dashboard views and visits during unwatched
   // periods were silently lost (officers appeared to meet far fewer customers).
   sampleIntervalMs: num(process.env.SAMPLE_INTERVAL_MS, 45000),
+  // Live ERP arrears API (elegansky-brain, on Render). Officer-tracker (also Render)
+  // can reach it; Tanzania cannot (onrender.com SNI block). Source of truth for each
+  // customer's overdue (pre-aggregated, overdue-only, carries plates).
+  arrearsApiUrl: process.env.ARREARS_API_URL || 'https://elegansky-brain.onrender.com/arrears/customer',
+
   // Optional shared secret the mobile check-in app must send (x-app-token header).
   // Unset → the check-in endpoint is open (fine for an internal field tool).
   appToken: process.env.APP_TOKEN || '',

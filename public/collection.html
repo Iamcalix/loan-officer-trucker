@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Collection Report</title>
+<style>
+  :root{--line:#e5e7eb;--mut:#6b7280;--bad:#ef4444;--good:#22c55e;--head:#f9fafb}
+  *{box-sizing:border-box}
+  body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;color:#111827;background:#fff}
+  .bar{display:flex;align-items:center;gap:12px;padding:12px 16px;border-bottom:1px solid var(--line);position:sticky;top:0;background:#fff;z-index:2}
+  .bar h1{font-size:16px;margin:0;font-weight:700}
+  .bar .asof{font-size:12px;color:var(--mut)} .bar .stale{color:#b45309;font-weight:600}
+  .bar input,.bar button{font:inherit;padding:6px 10px;border:1px solid var(--line);border-radius:8px;background:#fff}
+  .bar .sp{margin-left:auto}
+  .wrap{overflow:auto}
+  table{border-collapse:collapse;width:100%;min-width:900px;font-size:14px}
+  th,td{padding:10px 14px;border-bottom:1px solid var(--line);white-space:nowrap}
+  thead th{background:var(--head);text-align:left;font-weight:600;color:#374151;position:sticky;top:53px}
+  td.num,th.num{text-align:right;font-variant-numeric:tabular-nums}
+  tr.sub td{font-weight:700;background:#fcfcfd}
+  tr.total td{font-weight:800;background:#f3f4f6;border-top:2px solid #d1d5db}
+  .dot{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:6px;vertical-align:-1px}
+  .good .dot{background:var(--good)} .bad .dot{background:var(--bad)}
+  .good{color:#15803d;font-weight:600} .bad{color:#b91c1c;font-weight:600}
+  .neg{color:#15803d}
+  .muted{color:var(--mut)}
+  #msg{padding:40px;text-align:center;color:var(--mut)}
+</style>
+</head>
+<body>
+<div class="bar">
+  <h1>Collection Report</h1>
+  <span class="asof" id="asof"></span>
+  <span class="sp"></span>
+  <input type="date" id="date">
+  <button id="reload">Refresh</button>
+  <button onclick="window.print()">Print</button>
+</div>
+<div class="wrap"><div id="msg">Loading…</div><table id="tbl" style="display:none">
+  <thead><tr>
+    <th>Loan Officer</th><th>Book</th><th class="num">Open Amount</th><th class="num">N. Boda</th>
+    <th class="num">Collection (posted)</th><th class="num">Remain</th><th class="num">% Coll</th><th>Status</th>
+  </tr></thead>
+  <tbody id="body"></tbody>
+</table></div>
+
+<script>
+const money = (n) => 'TSh ' + Number(n||0).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
+const pct = (n) => (Number(n||0)).toFixed(3) + '%';
+const statusCell = (s) => `<span class="${s==='GOOD'?'good':'bad'}"><span class="dot"></span>${s}</span>`;
+const remainCell = (n) => `<span class="${n<0?'neg':''}">${money(n)}</span>`;
+
+async function load(date) {
+  const q = date ? ('?date=' + date) : '';
+  document.getElementById('msg').style.display='block'; document.getElementById('msg').textContent='Loading…';
+  document.getElementById('tbl').style.display='none';
+  let j;
+  try { j = await (await fetch('/api/collection' + q)).json(); } catch(e){ document.getElementById('msg').textContent='Failed to load'; return; }
+  if (j.error) { document.getElementById('msg').textContent = 'ERP source error: ' + j.error; return; }
+  const asof = document.getElementById('asof');
+  asof.innerHTML = j.asOf ? (`as of <b>${j.asOf}</b>` + (j.stale ? ' <span class="stale">— snapshot is not today; ERP feed needs refreshing for live numbers</span>' : '')) : 'no data';
+  if (j.date && !date) document.getElementById('date').value = j.asOf;
+  const body = document.getElementById('body'); body.innerHTML='';
+  const row = (r, cls) => `<tr class="${cls||''}">
+    <td>${r.officer||r.label}</td><td class="muted">${r.book||''}</td>
+    <td class="num">${money(r.open)}</td><td class="num">${r.boda.toLocaleString()}</td>
+    <td class="num">${money(r.collection)}</td><td class="num">${remainCell(r.remain)}</td>
+    <td class="num">${pct(r.pct)}</td><td>${statusCell(r.status)}</td></tr>`;
+  for (const bk of (j.books||[])) {
+    for (const o of bk.officers) body.insertAdjacentHTML('beforeend', row(o));
+    body.insertAdjacentHTML('beforeend', row({...bk.subtotal, officer: `${bk.book} book — subtotal`, book: bk.book}, 'sub'));
+  }
+  if (j.total) body.insertAdjacentHTML('beforeend', row({...j.total, officer:'TOTAL — all officers', book:''}, 'total'));
+  document.getElementById('msg').style.display='none';
+  document.getElementById('tbl').style.display='table';
+}
+document.getElementById('reload').onclick = () => load(document.getElementById('date').value || null);
+document.getElementById('date').onchange = (e) => load(e.target.value || null);
+load(null);
+</script>
+</body>
+</html>

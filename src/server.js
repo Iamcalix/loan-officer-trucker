@@ -13,6 +13,7 @@ import { loadRegister, matchCandidates, registerSize, customerByPlate, mapDbStat
 import { saveAssignments, setAssignmentPlate, setComment, getAssignments, assignedPlatesForDay } from './assignments.js';
 import { sampleFromRows, getVisits, getExtras } from './visitlog.js';
 import { recordCheckin, getCheckins, signedPhotoUrl } from './checkins.js';
+import { buildCollection } from './collection.js';
 import { officePlace, haversineM } from './places.js';
 import { analyzeTrack } from './visits.js';
 import { buildReport, writeReportFiles, listReports, eatToday } from './report.js';
@@ -478,6 +479,13 @@ const server = http.createServer(async (req, res) => {
       await saveRoster(clean, { force: true });
       snapCache = { at: 0, data: null, promise: null }; // rebuild officers on next read
       return sendJson(res, 200, { ok: true, count: Object.keys(clean).length });
+    }
+
+    // Loan-officer collection report (open vs collected, by book) — from the ERP.
+    if (p === '/api/collection' && req.method === 'GET') {
+      const date = url.searchParams.get('date') || null;
+      try { return sendJson(res, 200, await buildCollection(date)); }
+      catch (e) { return sendJson(res, 502, { error: String(e.message || e).slice(0, 200) }); }
     }
 
     // ---- Mobile check-in app endpoints ----

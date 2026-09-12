@@ -47,7 +47,18 @@ export async function buildCollection(date) {
   }
   officers.sort((a, b) => b.open - a.open);
 
-  return { day, officers, total: total(officers), payLive: paysheetEnabled() };
+  // Diagnostic: how many sheet payments matched an assigned plate vs missed — so a
+  // matching problem (payments present but not landing on the report) is visible.
+  const assignedPlates = new Set();
+  for (const items of byOfficer.values()) for (const it of items) if (it.plate) assignedPlates.add(normPlate(it.plate));
+  let matchedPlates = 0; const unmatchedSample = [];
+  for (const p of paidByPlate.keys()) {
+    if (assignedPlates.has(p)) matchedPlates += 1;
+    else if (unmatchedSample.length < 15) unmatchedSample.push(p);
+  }
+  const payDebug = { platesPaidInSheet: paidByPlate.size, matchedToAssigned: matchedPlates, unmatchedSample };
+
+  return { day, officers, total: total(officers), payLive: paysheetEnabled(), payDebug };
 }
 
 function total(list) {

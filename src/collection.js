@@ -12,12 +12,22 @@
 import { officerImeis, officerFor } from './officers.js';
 import { getAssignments } from './assignments.js';
 import { paymentsByPlate, paysheetEnabled } from './paysheet.js';
+import { customerByPlate } from './register.js';
 
 const normPlate = (s) => String(s || '').toUpperCase().replace(/[^A-Z0-9]/g, '').replace(/([A-Z])\d+$/, '$1');
+const normName = (s) => String(s || '').toUpperCase().replace(/[^A-Z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
 
 export async function buildCollection(date) {
   const day = date || new Date(Date.now() + 3 * 3600 * 1000).toISOString().slice(0, 10);
   const paidByPlate = await paymentsByPlate(date).catch(() => new Map()); // LIVE, by plate
+  // Also index payments by customer NAME (resolve each paid plate through the register),
+  // so a follow-list customer who paid under a DIFFERENT plate than their assigned one
+  // is still posted. Every payment that belongs to a follow-list customer counts.
+  const paidByName = new Map();
+  for (const [plate, amt] of paidByPlate) {
+    const c = customerByPlate(plate);
+    if (c?.name) { const nm = normName(c.name); paidByName.set(nm, (paidByName.get(nm) || 0) + amt); }
+  }
 
   const assignments = await getAssignments(day).catch(() => []);
   const byOfficer = new Map();
@@ -26,6 +36,7 @@ export async function buildCollection(date) {
     byOfficer.get(a.officerImei).push(a);
   }
 
+  const usedPlate = new Set();       // avoid crediting the same payment twice
   const officers = [];
   for (const imei of officerImeis()) {
     const items = byOfficer.get(imei) || [];
@@ -34,7 +45,11 @@ export async function buildCollection(date) {
     for (const it of items) {
       const amt = Number(it.amount) || 0;                       // Open = pasted overdue
       if (amt > 0) { open += amt; withAmount += 1; }
-      const pd = it.plate ? paidByPlate.get(normPlate(it.plate)) : 0; // Collection = live payment
+      // Collection: this customer's payment today — by plate, else by name.
+      const pl = it.plate ? normPlate(it.plate) : '';
+      let pd = pl && paidByPlate.has(pl) && !usedPlate.has(pl) ? paidByPlate.get(pl) : 0;
+      if (pd) usedPlate.add(pl);
+      else pd = paidByName.get(normName(it.name || it.enteredName)) || 0;
       if (pd) { collection += pd; paidCount += 1; }
     }
     const remain = open - collection;
@@ -47,16 +62,19 @@ export async function buildCollection(date) {
   }
   officers.sort((a, b) => b.open - a.open);
 
-  // Diagnostic: how many sheet payments matched an assigned plate vs missed — so a
-  // matching problem (payments present but not landing on the report) is visible.
-  const assignedPlates = new Set();
-  for (const items of byOfficer.values()) for (const it of items) if (it.plate) assignedPlates.add(normPlate(it.plate));
-  let matchedPlates = 0; const unmatchedSample = [];
+  // Diagnostic: sheet payments matched to a follow-list customer (plate or name) vs not.
+  const assignedPlates = new Set(), assignedNames = new Set();
+  for (const items of byOfficer.values()) for (const it of items) {
+    if (it.plate) assignedPlates.add(normPlate(it.plate));
+    assignedNames.add(normName(it.name || it.enteredName));
+  }
+  let matched = 0; const unmatchedSample = [];
   for (const p of paidByPlate.keys()) {
-    if (assignedPlates.has(p)) matchedPlates += 1;
+    const nm = normName(customerByPlate(p)?.name || '');
+    if (assignedPlates.has(p) || (nm && assignedNames.has(nm))) matched += 1;
     else if (unmatchedSample.length < 15) unmatchedSample.push(p);
   }
-  const payDebug = { platesPaidInSheet: paidByPlate.size, matchedToAssigned: matchedPlates, unmatchedSample };
+  const payDebug = { platesPaidInSheet: paidByPlate.size, matchedToFollowList: matched, unmatchedSample };
 
   return { day, officers, total: total(officers), payLive: paysheetEnabled(), payDebug };
 }

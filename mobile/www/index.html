@@ -158,6 +158,15 @@ async function loadOfficers() {
   const r = await api('/api/app/officers'); const j = await r.json();
   const sel = $('officerSel'); sel.innerHTML = '';
   for (const o of j.officers) { const opt = document.createElement('option'); opt.value = o.imei; opt.textContent = o.name; sel.appendChild(opt); }
+  // Roster tracker-ids can change; re-resolve the saved officer by NAME so a changed
+  // id never leaves the phone showing an empty list.
+  if (officer) {
+    const cur = j.officers.find((o) => String(o.name).toUpperCase() === String(officer.name).toUpperCase());
+    if (cur && cur.imei !== officer.imei) {
+      officer.imei = cur.imei; localStorage.setItem('officer', JSON.stringify(officer));
+      loadList();
+    }
+  }
 }
 async function loadList() {
   $('listBody').innerHTML = '<div class="mut">Loading…</div>';

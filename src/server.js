@@ -10,7 +10,7 @@ import { config, assertConfigured } from './config.js';
 import { createFleetClient } from './fleet.js';
 import { officerFor, officerImeis, hasRoster, saveRoster, initRoster } from './officers.js';
 import { loadRegister, matchCandidates, registerSize, customerByPlate, mapDbStatus } from './register.js';
-import { saveAssignments, setAssignmentPlate, setComment, getAssignments, assignedPlatesForDay } from './assignments.js';
+import { saveAssignments, setAssignmentPlate, setComment, getAssignments, assignedPlatesForDay, importPool, assignCustomer, POOL } from './assignments.js';
 import { sampleFromRows, getVisits, getExtras } from './visitlog.js';
 import { recordCheckin, getCheckins, signedPhotoUrl } from './checkins.js';
 import { buildCollection } from './collection.js';
@@ -546,27 +546,62 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (p === '/api/customers') {
-      // Only the assigned follow-list customers for the day, at their bikes' current
-      // positions — the app now focuses on those, not the whole fleet.
+      // EVERY follow-up customer for the day (pool + assigned), with their overdue
+      // amount, who they're assigned to, and their bike's live position — so the
+      // dashboard/app map can show all of them with amount labels for the supervisor
+      // to divide among officers.
       const day = url.searchParams.get('day') || eatToday();
-      const [assigned, plateIdx, locs] = await Promise.all([
-        assignedPlatesForDay(day).catch(() => new Map()),
+      const [rows, plateIdx, locs] = await Promise.all([
+        getAssignments(day).catch(() => []),
         getPlateIndex().catch(() => new Map()),
         getLiveLocations().catch(() => []),
       ]);
       const liveByImei = new Map(locs.map((l) => [l.imei, l]));
+      const byPlate = new Map();
+      for (const r of rows) {
+        if (!r.plate) continue;
+        const key = normPlate(r.plate);
+        const cur = byPlate.get(key) || { plate: key, name: customerByPlate(key)?.name || r.name || key, amount: 0, assignedTo: [], pool: false };
+        cur.amount = Math.max(cur.amount, Number(r.amount) || 0);
+        if (r.officerImei === POOL) cur.pool = true;
+        else if (!cur.assignedTo.includes(officerFor(r.officerImei)?.name || r.officerImei)) cur.assignedTo.push(officerFor(r.officerImei)?.name || r.officerImei);
+        byPlate.set(key, cur);
+      }
       const list = [];
-      for (const [plate, officerImeisForPlate] of assigned) {
+      for (const [plate, c] of byPlate) {
         let pos = null;
         for (const im of (plateIdx.get(plate) || [])) { const l = liveByImei.get(im); if (l) { pos = l; break; } }
-        if (!pos) continue; // can't place a customer whose bike isn't reporting now
-        list.push({
-          plate, name: customerByPlate(plate)?.name || plate,
-          lat: pos.lat, lng: pos.lng, assigned: true,
-          assignedTo: officerImeisForPlate.map((im) => officerFor(im)?.name || im),
-        });
+        const assigned = c.assignedTo.length > 0;
+        list.push({ plate, name: c.name, amount: c.amount, assigned, assignedTo: c.assignedTo, pool: !assigned, lat: pos?.lat ?? null, lng: pos?.lng ?? null });
       }
-      return sendJson(res, 200, { count: list.length, assignedCount: list.length, customers: list });
+      list.sort((a, b) => b.amount - a.amount);
+      return sendJson(res, 200, { count: list.length, assignedCount: list.filter((c) => c.assigned).length, poolCount: list.filter((c) => c.pool).length, customers: list });
+    }
+
+    // Import the day's follow-up list as ONE pool (unassigned): { day?, names[] }.
+    if (p === '/api/pool/import' && req.method === 'POST') {
+      const body = await readBody(req);
+      let payload; try { payload = JSON.parse(body || '{}'); } catch { return sendJson(res, 400, { error: 'invalid JSON' }); }
+      const day = payload.day || eatToday();
+      const names = Array.isArray(payload.names) ? payload.names : String(payload.text || '').split(/\r?\n/);
+      const r = await importPool(day, names).catch((e) => ({ error: String(e.message || e) }));
+      if (r.error) return sendJson(res, 500, r);
+      snapCache = { at: 0, data: null, promise: null };
+      return sendJson(res, 200, r);
+    }
+
+    // Supervisor assigns a customer to an officer (or POOL to unassign):
+    // { day?, plate?, enteredName?, officerImei }.
+    if (p === '/api/pool/assign' && req.method === 'POST') {
+      const body = await readBody(req);
+      let payload; try { payload = JSON.parse(body || '{}'); } catch { return sendJson(res, 400, { error: 'invalid JSON' }); }
+      const day = payload.day || eatToday();
+      if (!payload.plate && !payload.enteredName) return sendJson(res, 400, { error: 'plate or enteredName required' });
+      const officerImei = payload.officerImei || POOL;
+      if (officerImei !== POOL && !/^\d{6,}$/.test(String(officerImei))) return sendJson(res, 400, { error: 'bad officerImei' });
+      const r = await assignCustomer(day, { plate: payload.plate, enteredName: payload.enteredName }, officerImei).catch((e) => ({ ok: false, error: String(e.message || e) }));
+      snapCache = { at: 0, data: null, promise: null };
+      return sendJson(res, r.ok ? 200 : 500, r);
     }
 
     // Register search — fuzzy name matches for the manual-map UI / autocomplete.

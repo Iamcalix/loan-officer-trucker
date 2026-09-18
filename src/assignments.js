@@ -117,3 +117,56 @@ export async function assignedPlatesForDay(day) {
   }
   return map;
 }
+
+// ---- Pool model: import the day's follow-up list as ONE unassigned pool, then the
+// supervisor assigns each customer to a field officer from the dashboard. Unassigned
+// rows carry the sentinel officer_imei = 'POOL' (real officers get their imei on
+// assign). Reports/collection iterate real officers, so POOL rows are naturally
+// excluded until assigned. ----
+export const POOL = 'POOL';
+const _normPlate = (s) => String(s || '').toUpperCase().replace(/[^A-Z0-9]/g, '').replace(/([A-Z])\d+$/, '$1');
+const _normName = (s) => String(s || '').toUpperCase().replace(/[^A-Z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
+
+// Import the whole day's follow-up list into the pool (unassigned). Replaces existing
+// POOL rows for the day; leaves already-assigned customers alone (and won't re-pool a
+// customer already given to an officer).
+export async function importPool(day, names) {
+  const existing = await getAssignments(day).catch(() => []);
+  const assignedPlates = new Set(existing.filter((r) => r.officerImei !== POOL && r.plate).map((r) => _normPlate(r.plate)));
+  const assignedNames = new Set(existing.filter((r) => r.officerImei !== POOL).map((r) => _normName(r.enteredName)));
+  const seen = new Set();
+  const rows = [];
+  const matched = [], unmatched = [];
+  for (const raw of names) {
+    const { name, amount } = parseImportedRow(raw);
+    if (!name) continue;
+    const key = name.toUpperCase();
+    if (seen.has(key)) continue; seen.add(key);
+    const hit = bestMatch(name);
+    const plate = hit?.plate || null;
+    if ((plate && assignedPlates.has(_normPlate(plate))) || assignedNames.has(_normName(name))) continue; // already given to an officer
+    rows.push({ day, officer_imei: POOL, entered_name: name.slice(0, 120), plate, matched: Boolean(hit), amount: amount || null });
+    if (hit) matched.push({ name, plate: hit.plate, amount }); else unmatched.push(name);
+  }
+  if (supabaseEnabled()) {
+    await sbDelete(`assignments?day=eq.${day}&officer_imei=eq.${POOL}`);
+    if (rows.length) {
+      try { await sbInsert('assignments', rows); }
+      catch { await sbInsert('assignments', rows.map(({ amount, ...r }) => r)); } // amount column not added yet
+    }
+  }
+  return { day, pooled: rows.length, matched, unmatched };
+}
+
+// Assign a customer (by plate, else entered_name) to an officer — or to POOL to
+// unassign. This is the supervisor's "divide the list" action.
+export async function assignCustomer(day, { plate, enteredName }, officerImei) {
+  if (!supabaseEnabled()) return { ok: false };
+  const filt = plate ? `plate=eq.${encodeURIComponent(plate)}` : `entered_name=eq.${encodeURIComponent(enteredName || '')}`;
+  await sb(`assignments?day=eq.${day}&${filt}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', Prefer: 'return=minimal' },
+    body: JSON.stringify({ officer_imei: String(officerImei || POOL) }),
+  });
+  return { ok: true, plate: plate || null, officerImei };
+}

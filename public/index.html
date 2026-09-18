@@ -89,6 +89,7 @@
   #hctl select, #hctl button { background:var(--bg); color:var(--txt); border:1px solid var(--line); border-radius:6px; padding:5px 8px; }
   #hctl button { cursor:pointer; }
   .leaflet-tooltip.lbl { background:#0b1220; color:#e2e8f0; border:1px solid var(--line); }
+  .leaflet-tooltip.lbl.amt { font-size:11px; padding:1px 5px; }
 </style>
 </head>
 <body>
@@ -117,7 +118,8 @@
         <option value="24">last 24h</option>
       </select>
       <button id="live">↩ Live all</button>
-      <label style="display:flex;gap:5px;align-items:center;cursor:pointer"><input type="checkbox" id="showCust" checked /> Assigned customers</label>
+      <label style="display:flex;gap:5px;align-items:center;cursor:pointer"><input type="checkbox" id="showCust" checked /> Follow-up customers</label>
+      <span class="lbl" id="custStat"></span>
     </div>
     <div id="bar">
       <button id="play">▶</button>
@@ -144,17 +146,16 @@
 
 <div id="fmodal">
   <div id="fpanel">
-    <div class="top"><h2>📋 Daily follow-list — customers each officer must visit today</h2></div>
+    <div class="top"><h2>📋 Import follow-up pool — one list; the supervisor divides it on the map</h2></div>
     <div class="body">
-      <label>Officer</label>
-      <select id="fofficer"></select>
-      <textarea id="fnames" placeholder="Paste this officer's customer names — one per line"></textarea>
+      <label>Paste today's whole follow-up list (name + overdue amount per line). Assign each customer to an officer by clicking their marker on the map.</label>
+      <textarea id="fnames" placeholder="One per line, name then overdue amount, e.g.&#10;SAID AIDANI ZAKARIA 157500&#10;JUMA SAIDI OMARY  45,000"></textarea>
       <div id="fresult"></div>
     </div>
     <div class="foot">
       <span class="cnt" id="fcnt"></span>
       <button class="cancel" id="fcancel">Close</button>
-      <button class="save" id="fsave">Save list</button>
+      <button class="save" id="fsave">Import pool</button>
     </div>
   </div>
 </div>
@@ -190,6 +191,30 @@ function clearTrailLines() { if (trailLayer) trailLayer.clearLayers(); trailLine
 const $ = (id) => document.getElementById(id);
 const fmt = (s) => s ? new Date(s * 1000).toLocaleString() : '—';
 const hm = (s) => s ? new Date(s * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '—';
+// Compact money label for map markers, e.g. 45000 -> "45k", 157500 -> "158k".
+const fmtK = (n) => { n = Number(n) || 0; return n >= 1000 ? Math.round(n / 1000) + 'k' : String(n); };
+const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+// Officer roster for the assign dropdowns (name + imei).
+let officerRoster = [];
+async function loadOfficerRoster() {
+  try { officerRoster = (await (await fetch('/api/app/officers')).json()).officers || []; } catch { /* keep old */ }
+}
+// The supervisor's assign control: a <select> of officers (+ Pool) that assigns the
+// customer on change. Used in each customer marker's popup.
+function assignSelectHtml(plate, assignedTo) {
+  const cur = (assignedTo && assignedTo.length) ? assignedTo[0] : '';
+  const opts = ['<option value="POOL">— pool (unassigned) —</option>']
+    .concat(officerRoster.map((o) => `<option value="${o.imei}"${o.name === cur ? ' selected' : ''}>${esc(o.name)}</option>`));
+  return `<select onchange="assignCustomer('${esc(plate)}', this.value)" style="width:100%;padding:6px;margin-top:6px">${opts.join('')}</select>`;
+}
+async function assignCustomer(plate, officerImei) {
+  try {
+    await fetch('/api/pool/assign', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ plate, officerImei }) });
+    updateCustomers();
+  } catch { alert('assign failed — check connection'); }
+}
+window.assignCustomer = assignCustomer;
 
 const STATE_COLOR = { office: '#3b82f6', customer: '#22c55e', moving: '#94a3b8', stopped: '#f97316', offline: '#ef4444' };
 function stateColor(state) { return STATE_COLOR[state] || '#94a3b8'; }
@@ -237,18 +262,24 @@ async function loadCustomers() {
     const j = await (await fetch('/api/customers')).json();
     if (custLayer) map.removeLayer(custLayer);
     custLayer = L.layerGroup();
+    let pool = 0, assigned = 0;
     for (const c of (j.customers || [])) {
-      if (c.assigned) {
-        // "Must-follow" customer today — highlighted marker, drawn prominently.
-        L.circleMarker([c.lat, c.lng], { radius: 8, color: '#b45309', weight: 2, fillColor: '#fbbf24', fillOpacity: .95 })
-          .bindTooltip('⭐ ' + c.name + (c.assignedTo ? ' → ' + c.assignedTo.join(', ') : ''), { className: 'lbl' })
-          .addTo(custLayer);
-      } else {
-        L.circleMarker([c.lat, c.lng], { radius: 3, color: '#64748b', weight: 1, fillColor: '#94a3b8', fillOpacity: .6 })
-          .bindTooltip(c.name, { className: 'lbl' })
-          .addTo(custLayer);
-      }
+      if (c.assigned) assigned++; else pool++;
+      if (!Number.isFinite(c.lat) || !Number.isFinite(c.lng)) continue; // no live position → panel only
+      // Every follow-up customer shows its OVERDUE AMOUNT as a permanent label so the
+      // supervisor can see who owes what while dividing the list. Pool = amber, assigned = green.
+      const amt = c.amount > 0 ? 'TSh ' + fmtK(c.amount) : '—';
+      const label = c.assigned
+        ? `<b>${amt}</b> ${esc(c.name)} → ${esc((c.assignedTo || []).join(', '))}`
+        : `<b>${amt}</b> ${esc(c.name)}`;
+      const color = c.assigned ? { color: '#166534', fill: '#22c55e' } : { color: '#b45309', fill: '#fbbf24' };
+      L.circleMarker([c.lat, c.lng], { radius: 7, color: color.color, weight: 2, fillColor: color.fill, fillOpacity: .95 })
+        .bindTooltip(label, { permanent: true, direction: 'top', className: 'lbl amt' })
+        .bindPopup(`<b>${esc(c.name)}</b><br>${c.plate}<br>Overdue: <b>TSh ${(c.amount || 0).toLocaleString()}</b>`
+          + `<br><span style="font-size:11px;color:#64748b">Assign to officer:</span>${assignSelectHtml(c.plate, c.assignedTo)}`)
+        .addTo(custLayer);
     }
+    const el = $('custStat'); if (el) el.textContent = `${assigned} assigned · ${pool} in pool`;
     if (!selected) custLayer.addTo(map);
   } catch { /* customers optional */ }
 }
@@ -563,29 +594,13 @@ $('psave').onclick = async () => {
   finally { $('psave').textContent = 'Save'; $('psave').disabled = false; }
 };
 
-// ---- Daily follow-list modal ----
-async function openFollow() {
+// ---- Import follow-up pool modal ----
+function openFollow() {
   $('fmodal').classList.add('show');
   $('fresult').innerHTML = ''; $('fnames').value = ''; $('fcnt').textContent = '';
-  $('fofficer').innerHTML = '<option>Loading…</option>';
-  const j = await (await fetch('/api/devices')).json();
-  const offs = (j.devices || []).filter((d) => d.isOfficer);
-  if (!offs.length) { $('fofficer').innerHTML = '<option value="">— no officers set (use ⚙ Manage officers first) —</option>'; return; }
-  $('fofficer').innerHTML = offs.map((d) => `<option value="${d.imei}">${(d.officer && d.officer.name) || d.name}</option>`).join('');
-  loadOfficerList();
-}
-async function loadOfficerList() {
-  const imei = $('fofficer').value; if (!imei) return;
-  $('fresult').innerHTML = '';
-  try {
-    const j = await (await fetch('/api/assignments')).json();
-    const o = (j.officers || []).find((x) => x.officerImei === imei);
-    $('fnames').value = o ? o.items.map((i) => i.enteredName).join('\n') : '';
-    $('fcnt').textContent = o ? `${o.items.filter((i) => i.matched).length}/${o.items.length} matched for today` : 'no list yet for today';
-  } catch { /* */ }
 }
 function renderFollowResult(officerImei, r) {
-  let h = `<div class="ok">✓ ${r.matched.length} matched</div>`;
+  let h = `<div class="ok">✓ ${r.pooled != null ? r.pooled + ' imported · ' : ''}${r.matched.length} matched</div>`;
   if (r.unmatched.length) {
     h += `<div class="no" style="margin-top:6px">${r.unmatched.length} unmatched — search the register to map each:</div>`;
     for (const name of r.unmatched) {
@@ -617,27 +632,26 @@ function renderFollowResult(officerImei, r) {
   });
 }
 $('followBtn').onclick = openFollow;
-$('fofficer').onchange = loadOfficerList;
 $('fcancel').onclick = () => $('fmodal').classList.remove('show');
 $('fmodal').onclick = (e) => { if (e.target.id === 'fmodal') $('fmodal').classList.remove('show'); };
 $('fsave').onclick = async () => {
-  const officerImei = $('fofficer').value;
-  if (!officerImei) { alert('Pick an officer first.'); return; }
   const names = $('fnames').value.split('\n').map((s) => s.trim()).filter(Boolean);
-  $('fsave').textContent = 'Saving…'; $('fsave').disabled = true;
+  if (!names.length) { alert('Paste the follow-up list first.'); return; }
+  $('fsave').textContent = 'Importing…'; $('fsave').disabled = true;
   try {
-    const r = await (await fetch('/api/assignments', {
+    const r = await (await fetch('/api/pool/import', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ officerImei, names }),
+      body: JSON.stringify({ names }),
     })).json();
-    if (!r.ok) throw new Error(r.error || 'save failed');
-    renderFollowResult(officerImei, r);
-    $('fcnt').textContent = `${r.matched.length}/${r.total} matched for today`;
+    if (r.error) throw new Error(r.error);
+    renderFollowResult('POOL', r);
+    $('fcnt').textContent = `${r.pooled} imported to the pool for today`;
     loadCustomers();
-  } catch (e) { alert('Save failed: ' + e.message); }
-  finally { $('fsave').textContent = 'Save list'; $('fsave').disabled = false; }
+  } catch (e) { alert('Import failed: ' + e.message); }
+  finally { $('fsave').textContent = 'Import pool'; $('fsave').disabled = false; }
 };
 
+loadOfficerRoster();
 loadPlaces();
 loadLive();
 loadCustomers();

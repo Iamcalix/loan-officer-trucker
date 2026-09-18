@@ -19,6 +19,7 @@
   .row{display:flex;align-items:center;gap:10px}
   .cust{display:flex;align-items:center;gap:10px;padding:12px;border:1px solid var(--line);border-radius:12px;margin-bottom:8px;background:var(--card)}
   .cust .nm{font-weight:600} .cust .pl{font-size:12px;color:var(--mut)}
+  .cust .amt{color:var(--warn);font-weight:600;margin-left:4px}
   .cust .grow{flex:1;min-width:0}
   .pill{font-size:11px;padding:3px 8px;border-radius:999px;white-space:nowrap}
   .pill.done{background:#052e16;color:#86efac} .pill.pend{background:#3f2d0a;color:#fcd34d}
@@ -178,7 +179,8 @@ async function loadList() {
     if (!j.items.length) { body.innerHTML = '<div class="mut">No follow-list assigned today.</div>'; return; }
     for (const it of j.items) {
       const d = document.createElement('div'); d.className = 'cust';
-      d.innerHTML = `<div class="grow"><div class="nm">${it.name || it.enteredName}</div><div class="pl">${it.plate || 'no plate'}</div></div>
+      const amt = it.amount > 0 ? `<span class="amt">TSh ${Number(it.amount).toLocaleString()}</span>` : '';
+      d.innerHTML = `<div class="grow"><div class="nm">${it.name || it.enteredName}</div><div class="pl">${it.plate || 'no plate'} ${amt}</div></div>
         <span class="pill ${it.visited?'done':'pend'}">${it.visited?'✓ visited':'pending'}</span>`;
       if (it.plate) d.onclick = () => openCapture(it);
       else { d.style.opacity = .5; }

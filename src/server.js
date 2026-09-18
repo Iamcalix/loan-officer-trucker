@@ -507,8 +507,9 @@ const server = http.createServer(async (req, res) => {
       const visited = new Set(visits.map((v) => normPlate(v.plate || v.name)));
       const items = rows.map((r) => ({
         name: r.name, enteredName: r.enteredName, plate: r.plate || null, matched: r.matched,
+        amount: Number(r.amount) || 0,
         visited: r.plate ? visited.has(normPlate(r.plate)) : false,
-      })).sort((a, b) => Number(a.visited) - Number(b.visited) || String(a.name).localeCompare(String(b.name)));
+      })).sort((a, b) => Number(a.visited) - Number(b.visited) || b.amount - a.amount || String(a.name).localeCompare(String(b.name)));
       return sendJson(res, 200, { day, imei, name: officerFor(imei)?.name || imei, items });
     }
 

@@ -270,8 +270,8 @@ async function loadCustomers() {
       // supervisor can see who owes what while dividing the list. Pool = amber, assigned = green.
       const amt = c.amount > 0 ? 'TSh ' + fmtK(c.amount) : '—';
       const label = c.assigned
-        ? `<b>${amt}</b> ${esc(c.name)} → ${esc((c.assignedTo || []).join(', '))}`
-        : `<b>${amt}</b> ${esc(c.name)}`;
+        ? `<b>${amt}</b> ${esc(c.plate || '')} · ${esc(c.name)} → ${esc((c.assignedTo || []).join(', '))}`
+        : `<b>${amt}</b> ${esc(c.plate || '')} · ${esc(c.name)}`;
       const color = c.assigned ? { color: '#166534', fill: '#22c55e' } : { color: '#b45309', fill: '#fbbf24' };
       L.circleMarker([c.lat, c.lng], { radius: 7, color: color.color, weight: 2, fillColor: color.fill, fillOpacity: .95 })
         .bindTooltip(label, { permanent: true, direction: 'top', className: 'lbl amt' })

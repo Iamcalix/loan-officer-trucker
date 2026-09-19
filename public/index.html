@@ -119,6 +119,7 @@
       </select>
       <button id="live">↩ Live all</button>
       <label style="display:flex;gap:5px;align-items:center;cursor:pointer"><input type="checkbox" id="showCust" checked /> Follow-up customers</label>
+      <button id="autoAssign" title="Assign every pool customer to the nearest officer (by proximity)">⭐ Auto-assign pool</button>
       <span class="lbl" id="custStat"></span>
     </div>
     <div id="bar">
@@ -197,24 +198,65 @@ const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<
 
 // Officer roster for the assign dropdowns (name + imei).
 let officerRoster = [];
+let lastCustomers = []; // last /api/customers payload, for the bulk auto-assign action
 async function loadOfficerRoster() {
   try { officerRoster = (await (await fetch('/api/app/officers')).json()).officers || []; } catch { /* keep old */ }
 }
 // The supervisor's assign control: a <select> of officers (+ Pool) that assigns the
-// customer on change. Used in each customer marker's popup.
-function assignSelectHtml(plate, assignedTo) {
+// customer on change. Used in each customer marker's popup. For an unassigned (pool)
+// customer we PRE-SELECT the proximity-suggested officer (⭐) so the supervisor can just
+// confirm — but any option can still be picked.
+function assignSelectHtml(plate, assignedTo, suggestImei) {
   const cur = (assignedTo && assignedTo.length) ? assignedTo[0] : '';
   const opts = ['<option value="POOL">— pool (unassigned) —</option>']
-    .concat(officerRoster.map((o) => `<option value="${o.imei}"${o.name === cur ? ' selected' : ''}>${esc(o.name)}</option>`));
+    .concat(officerRoster.map((o) => {
+      const isSuggest = !cur && suggestImei && o.imei === suggestImei;
+      const sel = (cur && o.name === cur) || isSuggest;
+      return `<option value="${o.imei}"${sel ? ' selected' : ''}>${esc(o.name)}${isSuggest ? ' ⭐' : ''}</option>`;
+    }));
   return `<select onchange="assignCustomer('${esc(plate)}', this.value)" style="width:100%;padding:6px;margin-top:6px">${opts.join('')}</select>`;
 }
 async function assignCustomer(plate, officerImei) {
   try {
     await fetch('/api/pool/assign', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ plate, officerImei }) });
-    updateCustomers();
+    loadCustomers();
   } catch { alert('assign failed — check connection'); }
 }
 window.assignCustomer = assignCustomer;
+
+// Proximity suggestions: for each POOL (unassigned) customer, find the nearest "anchor"
+// — a live officer position OR an already-assigned customer — and suggest that officer.
+// This clusters nearby customers under one officer so routes stay tight. Returns
+// Map(plate → { imei, name, distM }). Officer imeis are resolved to the roster (the
+// value the assign dropdown/endpoint expects) via name.
+function proximitySuggestions(customers) {
+  const nameToImei = new Map(officerRoster.map((o) => [o.name, o.imei]));
+  const anchors = [];
+  for (const o of officers) { // live officer positions
+    if (!Number.isFinite(o.lat) || !Number.isFinite(o.lng)) continue;
+    const imei = nameToImei.get(o.name) || o.imei;
+    if (imei) anchors.push({ imei, name: o.name, lat: o.lat, lng: o.lng });
+  }
+  for (const c of customers) { // already-assigned customers → their officer
+    if (!c.assigned || !Number.isFinite(c.lat) || !Number.isFinite(c.lng)) continue;
+    const nm = (c.assignedTo || [])[0]; if (!nm) continue;
+    const imei = nameToImei.get(nm); if (!imei) continue;
+    anchors.push({ imei, name: nm, lat: c.lat, lng: c.lng });
+  }
+  const out = new Map();
+  if (!anchors.length) return out;
+  for (const c of customers) {
+    if (c.assigned || !Number.isFinite(c.lat) || !Number.isFinite(c.lng)) continue;
+    let best = null;
+    for (const a of anchors) {
+      const d = haversine({ lat: c.lat, lng: c.lng }, a);
+      if (!best || d < best.distM) best = { imei: a.imei, name: a.name, distM: d };
+    }
+    if (best) out.set(c.plate, best);
+  }
+  return out;
+}
+const distLabel = (m) => (m >= 1000 ? (m / 1000).toFixed(1) + 'km' : Math.round(m) + 'm');
 
 const STATE_COLOR = { office: '#3b82f6', customer: '#22c55e', moving: '#94a3b8', stopped: '#f97316', offline: '#ef4444' };
 function stateColor(state) { return STATE_COLOR[state] || '#94a3b8'; }
@@ -262,21 +304,27 @@ async function loadCustomers() {
     const j = await (await fetch('/api/customers')).json();
     if (custLayer) map.removeLayer(custLayer);
     custLayer = L.layerGroup();
+    const custs = j.customers || [];
+    lastCustomers = custs;                       // kept for the bulk auto-assign action
+    const suggest = proximitySuggestions(custs); // plate → { imei, name, distM }
     let pool = 0, assigned = 0;
-    for (const c of (j.customers || [])) {
+    for (const c of custs) {
       if (c.assigned) assigned++; else pool++;
       if (!Number.isFinite(c.lat) || !Number.isFinite(c.lng)) continue; // no live position → panel only
+      const sg = c.assigned ? null : suggest.get(c.plate);
       // Every follow-up customer shows its OVERDUE AMOUNT as a permanent label so the
       // supervisor can see who owes what while dividing the list. Pool = amber, assigned = green.
       const amt = c.amount > 0 ? 'TSh ' + fmtK(c.amount) : '—';
       const label = c.assigned
         ? `<b>${amt}</b> ${esc(c.plate || '')} · ${esc(c.name)} → ${esc((c.assignedTo || []).join(', '))}`
-        : `<b>${amt}</b> ${esc(c.plate || '')} · ${esc(c.name)}`;
+        : `<b>${amt}</b> ${esc(c.plate || '')} · ${esc(c.name)}${sg ? ` <span style="color:#2563eb">⭐${esc(sg.name)}</span>` : ''}`;
       const color = c.assigned ? { color: '#166534', fill: '#22c55e' } : { color: '#b45309', fill: '#fbbf24' };
+      const suggestLine = sg ? `<div style="font-size:11px;color:#2563eb;margin-top:4px">⭐ Suggested: <b>${esc(sg.name)}</b> · ${distLabel(sg.distM)} away</div>` : '';
       L.circleMarker([c.lat, c.lng], { radius: 7, color: color.color, weight: 2, fillColor: color.fill, fillOpacity: .95 })
         .bindTooltip(label, { permanent: true, direction: 'top', className: 'lbl amt' })
         .bindPopup(`<b>${esc(c.name)}</b><br>${c.plate}<br>Overdue: <b>TSh ${(c.amount || 0).toLocaleString()}</b>`
-          + `<br><span style="font-size:11px;color:#64748b">Assign to officer:</span>${assignSelectHtml(c.plate, c.assignedTo)}`)
+          + suggestLine
+          + `<br><span style="font-size:11px;color:#64748b">Assign to officer:</span>${assignSelectHtml(c.plate, c.assignedTo, sg && sg.imei)}`)
         .addTo(custLayer);
     }
     const el = $('custStat'); if (el) el.textContent = `${assigned} assigned · ${pool} in pool`;
@@ -529,6 +577,24 @@ function goLive() {
 }
 
 $('showCust').onchange = loadCustomers;
+// Bulk: assign every pool customer to its proximity-suggested officer at once.
+$('autoAssign').onclick = async () => {
+  const suggest = proximitySuggestions(lastCustomers);
+  const todo = (lastCustomers || []).filter((c) => !c.assigned && suggest.has(c.plate));
+  if (!todo.length) { alert('Nothing to auto-assign — no pool customers with a nearby officer.'); return; }
+  if (!confirm(`Auto-assign ${todo.length} pool customer(s) to the nearest officer?`)) return;
+  const btn = $('autoAssign'); btn.disabled = true; const orig = btn.textContent;
+  let done = 0;
+  for (const c of todo) {
+    const sg = suggest.get(c.plate);
+    try {
+      await fetch('/api/pool/assign', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ plate: c.plate, officerImei: sg.imei }) });
+      done++; btn.textContent = `⭐ ${done}/${todo.length}…`;
+    } catch { /* skip one failure, keep going */ }
+  }
+  btn.disabled = false; btn.textContent = orig;
+  await loadCustomers();
+};
 
 // ---- Officer picker modal ----
 function updatePcnt() {

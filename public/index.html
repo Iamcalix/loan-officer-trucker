@@ -203,23 +203,30 @@ async function loadOfficerRoster() {
   try { officerRoster = (await (await fetch('/api/app/officers')).json()).officers || []; } catch { /* keep old */ }
 }
 // The supervisor's assign control: a <select> of officers (+ Pool) that assigns the
-// customer on change. Used in each customer marker's popup. For an unassigned (pool)
-// customer we PRE-SELECT the proximity-suggested officer (⭐) so the supervisor can just
-// confirm — but any option can still be picked.
+// customer on change. Used in each customer marker's popup.
+// IMPORTANT: for an unassigned customer we do NOT pre-select the suggested officer —
+// a <select> only fires `onchange` when the value actually CHANGES, so pre-selecting
+// the suggestion means clicking it does nothing ("can't assign"). Instead the first
+// option is a neutral placeholder, so ANY officer pick fires the change. The suggestion
+// is marked with ⭐ (and offered as a one-click button in the popup).
 function assignSelectHtml(plate, assignedTo, suggestImei) {
   const cur = (assignedTo && assignedTo.length) ? assignedTo[0] : '';
-  const opts = ['<option value="POOL">— pool (unassigned) —</option>']
-    .concat(officerRoster.map((o) => {
-      const isSuggest = !cur && suggestImei && o.imei === suggestImei;
-      const sel = (cur && o.name === cur) || isSuggest;
-      return `<option value="${o.imei}"${sel ? ' selected' : ''}>${esc(o.name)}${isSuggest ? ' ⭐' : ''}</option>`;
-    }));
-  return `<select onchange="assignCustomer('${esc(plate)}', this.value)" style="width:100%;padding:6px;margin-top:6px">${opts.join('')}</select>`;
+  const opts = [];
+  if (!cur) opts.push('<option value="" selected>— choose officer… —</option>');
+  opts.push(`<option value="POOL"${cur ? '' : ''}>— pool (unassigned) —</option>`);
+  for (const o of officerRoster) {
+    const isSuggest = !cur && suggestImei && o.imei === suggestImei;
+    const sel = cur && o.name === cur;
+    opts.push(`<option value="${o.imei}"${sel ? ' selected' : ''}>${esc(o.name)}${isSuggest ? ' ⭐' : ''}</option>`);
+  }
+  return `<select onchange="if(this.value)assignCustomer('${esc(plate)}', this.value)" style="width:100%;padding:6px;margin-top:6px">${opts.join('')}</select>`;
 }
 async function assignCustomer(plate, officerImei) {
   try {
-    await fetch('/api/pool/assign', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ plate, officerImei }) });
-    loadCustomers();
+    map.closePopup();
+    const r = await fetch('/api/pool/assign', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ plate, officerImei }) });
+    if (!r.ok) { const e = await r.json().catch(() => ({})); alert('assign failed: ' + (e.error || r.status)); return; }
+    await loadCustomers();
   } catch { alert('assign failed — check connection'); }
 }
 window.assignCustomer = assignCustomer;
@@ -319,12 +326,14 @@ async function loadCustomers() {
         ? `<b>${amt}</b> ${esc(c.plate || '')} · ${esc(c.name)} → ${esc((c.assignedTo || []).join(', '))}`
         : `<b>${amt}</b> ${esc(c.plate || '')} · ${esc(c.name)}${sg ? ` <span style="color:#2563eb">⭐${esc(sg.name)}</span>` : ''}`;
       const color = c.assigned ? { color: '#166534', fill: '#22c55e' } : { color: '#b45309', fill: '#fbbf24' };
-      const suggestLine = sg ? `<div style="font-size:11px;color:#2563eb;margin-top:4px">⭐ Suggested: <b>${esc(sg.name)}</b> · ${distLabel(sg.distM)} away</div>` : '';
+      const suggestLine = sg
+        ? `<div style="margin-top:5px"><button onclick="assignCustomer('${esc(c.plate)}','${esc(sg.imei)}')" style="width:100%;padding:6px;background:#2563eb;color:#fff;border:none;border-radius:4px;cursor:pointer">⭐ Assign to ${esc(sg.name)} · ${distLabel(sg.distM)}</button></div>`
+        : '';
       L.circleMarker([c.lat, c.lng], { radius: 7, color: color.color, weight: 2, fillColor: color.fill, fillOpacity: .95 })
         .bindTooltip(label, { permanent: true, direction: 'top', className: 'lbl amt' })
         .bindPopup(`<b>${esc(c.name)}</b><br>${c.plate}<br>Overdue: <b>TSh ${(c.amount || 0).toLocaleString()}</b>`
           + suggestLine
-          + `<br><span style="font-size:11px;color:#64748b">Assign to officer:</span>${assignSelectHtml(c.plate, c.assignedTo, sg && sg.imei)}`)
+          + `<br><span style="font-size:11px;color:#64748b">Or assign to:</span>${assignSelectHtml(c.plate, c.assignedTo, sg && sg.imei)}`)
         .addTo(custLayer);
     }
     const el = $('custStat'); if (el) el.textContent = `${assigned} assigned · ${pool} in pool`;

@@ -13,6 +13,7 @@ import { loadRegister, matchCandidates, registerSize, customerByPlate, mapDbStat
 import { saveAssignments, setAssignmentPlate, setComment, getAssignments, assignedPlatesForDay, importPool, assignCustomer, POOL } from './assignments.js';
 import { sampleFromRows, getVisits, getExtras } from './visitlog.js';
 import { recordCheckin, getCheckins, signedPhotoUrl } from './checkins.js';
+import { recordTransfer, getTransfers, receiverQueue, SIDES } from './transfers.js';
 import { buildCollection } from './collection.js';
 import { officePlace, haversineM } from './places.js';
 import { analyzeTrack } from './visits.js';
@@ -544,6 +545,53 @@ const server = http.createServer(async (req, res) => {
       } catch (e) {
         return sendJson(res, 500, { error: String(e.message || e).slice(0, 200) });
       }
+    }
+
+    // Bike transfer — a 4-sides photo record at a stage of moving a bike to storage.
+    // Body: { stage:'field'|'receiver', actorImei?, actorName, plate, name, lat, lng, ts,
+    //         photos:{front,back,left,right}(base64), note, mime }.
+    // 'field' = the field officer collecting the bike (needs his officerImei);
+    // 'receiver' = whoever receives it at HQ (a different person; name only).
+    if (p === '/api/transfer' && req.method === 'POST') {
+      if (config.appToken && req.headers['x-app-token'] !== config.appToken) {
+        return sendJson(res, 401, { error: 'unauthorized' });
+      }
+      const body = await readBody(req).catch(() => null);
+      if (body == null) return sendJson(res, 413, { error: 'photos too large' });
+      let d; try { d = JSON.parse(body || '{}'); } catch { return sendJson(res, 400, { error: 'invalid JSON' }); }
+      const stage = String(d.stage || '');
+      if (stage !== 'field' && stage !== 'receiver') return sendJson(res, 400, { error: 'bad stage' });
+      if (stage === 'field' && !/^\d{6,}$/.test(String(d.actorImei || ''))) return sendJson(res, 400, { error: 'actorImei required for field stage' });
+      if (!String(d.actorName || '').trim()) return sendJson(res, 400, { error: 'actorName required' });
+      if (!d.plate) return sendJson(res, 400, { error: 'plate required' });
+      const src = d.photos || {};
+      const photos = {};
+      for (const s of SIDES) {
+        if (!src[s]) return sendJson(res, 400, { error: `photo "${s}" required (all 4 sides)` });
+        try { photos[s] = Buffer.from(String(src[s]).replace(/^data:[^,]*,/, ''), 'base64'); } catch { return sendJson(res, 400, { error: `bad photo "${s}"` }); }
+      }
+      try {
+        const r = await recordTransfer({ stage, actorImei: d.actorImei, actorName: d.actorName, plate: d.plate, name: d.name, lat: d.lat, lng: d.lng, ts: d.ts, photos, note: d.note, mime: d.mime });
+        return sendJson(res, 200, r);
+      } catch (e) {
+        return sendJson(res, 500, { error: String(e.message || e).slice(0, 200) });
+      }
+    }
+
+    // Transfers for a day (optionally ?stage=field|receiver) — for the office dashboard.
+    if (p === '/api/transfers' && req.method === 'GET') {
+      const day = url.searchParams.get('day') || eatToday();
+      const stage = url.searchParams.get('stage') || '';
+      const rows = await getTransfers(day, stage || undefined).catch(() => []);
+      return sendJson(res, 200, { day, stage: stage || 'all', count: rows.length, transfers: rows });
+    }
+
+    // The receiver's work queue: bikes field officers collected today that no receiver
+    // has logged yet. Body: ?day=.
+    if (p === '/api/app/receiver-queue' && req.method === 'GET') {
+      const day = url.searchParams.get('day') || eatToday();
+      const items = await receiverQueue(day).catch(() => []);
+      return sendJson(res, 200, { day, count: items.length, items });
     }
 
     if (p === '/api/customers') {

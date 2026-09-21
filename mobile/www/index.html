@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
 <title>Elegansky Field Check-in</title>
 <style>
-  :root{--bg:#0f172a;--card:#1e293b;--mut:#94a3b8;--fg:#e2e8f0;--acc:#22c55e;--warn:#f59e0b;--bad:#ef4444;--line:#334155}
+  :root{--bg:#0f172a;--card:#1e293b;--mut:#94a3b8;--fg:#e2e8f0;--acc:#22c55e;--warn:#f59e0b;--bad:#ef4444;--line:#334155;--blue:#3b82f6}
   *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
   body{margin:0;font-family:system-ui,-apple-system,Roboto,sans-serif;background:var(--bg);color:var(--fg);padding-top:env(safe-area-inset-top)}
   header{position:sticky;top:0;background:#0b1220;border-bottom:1px solid var(--line);padding:12px 14px;display:flex;align-items:center;gap:10px;z-index:5}
@@ -15,6 +15,7 @@
   .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px;margin-bottom:10px}
   button{font:inherit;border:0;border-radius:10px;padding:12px 14px;background:var(--acc);color:#04240f;font-weight:700}
   button.sec{background:#334155;color:var(--fg)} button.ghost{background:transparent;border:1px solid var(--line);color:var(--fg)}
+  button.blue{background:var(--blue);color:#fff} button.warnb{background:var(--warn);color:#3a2606}
   button:disabled{opacity:.5}
   .row{display:flex;align-items:center;gap:10px}
   .cust{display:flex;align-items:center;gap:10px;padding:12px;border:1px solid var(--line);border-radius:12px;margin-bottom:8px;background:var(--card)}
@@ -35,17 +36,36 @@
   img.preview{width:100%;border-radius:10px;border:1px solid var(--line);margin-top:8px}
   .spin{display:inline-block;width:14px;height:14px;border:2px solid #ffffff55;border-top-color:#fff;border-radius:50%;animation:s .8s linear infinite;vertical-align:-2px}
   @keyframes s{to{transform:rotate(360deg)}}
+  /* 4-sides grid */
+  .sides{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:10px}
+  .side{position:relative;border:1px dashed var(--line);border-radius:10px;aspect-ratio:4/3;display:flex;align-items:center;justify-content:center;overflow:hidden;background:#0b1220}
+  .side.filled{border-style:solid;border-color:var(--acc)}
+  .side img{width:100%;height:100%;object-fit:cover}
+  .side .lab{position:absolute;top:0;left:0;right:0;padding:4px 6px;font-size:12px;font-weight:600;background:linear-gradient(#000a,#0000);color:#fff}
+  .side .ph{color:var(--mut);font-size:13px;text-align:center}
+  .side .tick{position:absolute;bottom:4px;right:6px;color:var(--acc);font-weight:700}
 </style>
 </head>
 <body>
 <header>
-  <div class="t">📷 Field Check-in</div>
+  <div class="t">📷 Elegansky</div>
   <div class="who" id="who"></div>
 </header>
 <div class="wrap">
   <div id="netBanner" class="banner warn hide"></div>
 
-  <!-- Officer picker -->
+  <!-- Role picker -->
+  <section id="roleView" class="hide">
+    <div class="big">I am a…</div>
+    <div class="card">
+      <button id="roleField" class="blue" style="width:100%">🏍 Field officer</button>
+      <div style="height:10px"></div>
+      <button id="roleReceiver" class="warnb" style="width:100%">🏭 Receiver (head office → storage)</button>
+      <div class="mut" style="margin-top:10px">Field officers follow customers and can collect bikes. Receivers log bikes handed in at head office before they go to storage.</div>
+    </div>
+  </section>
+
+  <!-- Field officer picker -->
   <section id="pickView" class="hide">
     <div class="big">Who are you?</div>
     <div class="card">
@@ -56,7 +76,18 @@
     </div>
   </section>
 
-  <!-- Follow-list -->
+  <!-- Receiver name -->
+  <section id="receiverView" class="hide">
+    <div class="big">Receiver name</div>
+    <div class="card">
+      <div class="mut" style="margin-bottom:8px">Type your name — remembered on this phone.</div>
+      <input id="receiverName" placeholder="e.g. HAMISI (receiver)" autocomplete="off">
+      <div style="height:10px"></div>
+      <button id="receiverGo" class="warnb" style="width:100%">Continue</button>
+    </div>
+  </section>
+
+  <!-- Field officer follow-list -->
   <section id="listView" class="hide">
     <div class="row" style="margin-bottom:8px">
       <div class="big" id="listTitle" style="margin:0">Today's customers</div>
@@ -66,7 +97,20 @@
     <div id="listBody"></div>
   </section>
 
-  <!-- Capture -->
+  <!-- Receiver queue: bikes awaiting receipt -->
+  <section id="queueView" class="hide">
+    <div class="row" style="margin-bottom:8px">
+      <div class="big" id="queueTitle" style="margin:0">Bikes to receive</div>
+      <button class="ghost" id="qRefreshBtn" style="margin-left:auto;padding:8px 10px">↻</button>
+    </div>
+    <div id="uploadBanner" class="banner ok hide"></div>
+    <div class="mut" style="margin-bottom:8px">Bikes field officers brought to head office today. Tap one, photograph all 4 sides as you receive it.</div>
+    <div id="queueBody"></div>
+    <div style="height:12px"></div>
+    <button id="qManual" class="ghost" style="width:100%">+ Receive a bike not in the list</button>
+  </section>
+
+  <!-- Single-photo visit check-in (field) -->
   <section id="capView" class="hide">
     <button class="ghost" id="backBtn" style="padding:8px 12px;margin-bottom:10px">← Back</button>
     <div class="card">
@@ -74,27 +118,57 @@
       <div class="pl mut" id="capPlate"></div>
       <div id="gpsLine" class="mut" style="margin-top:8px">📍 getting location…</div>
       <img id="preview" class="preview hide">
-      <input type="file" id="camInput" accept="image/*" capture="environment" class="hide">
       <div style="height:12px"></div>
       <button id="snapBtn" style="width:100%">📷 Take photo of plate</button>
       <div style="height:8px"></div>
       <button id="sendBtn" class="sec hide" style="width:100%">Upload check-in</button>
+      <div style="height:14px"></div>
+      <button id="collectBtn" class="warnb" style="width:100%">🏍 Collect bike → take to head office</button>
+    </div>
+  </section>
+
+  <!-- 4-sides transfer capture (field collect OR receiver) -->
+  <section id="xferView" class="hide">
+    <button class="ghost" id="xferBack" style="padding:8px 12px;margin-bottom:10px">← Back</button>
+    <div class="card">
+      <div class="nm big" id="xferName" style="margin:0"></div>
+      <div class="pl mut" id="xferPlate"></div>
+      <div id="xferStage" class="banner warn" style="margin-top:8px"></div>
+      <div id="xferGps" class="mut">📍 getting location…</div>
+      <div class="mut" style="margin-top:8px">Photograph <b>all 4 sides</b> of the bike:</div>
+      <div class="sides" id="sidesGrid"></div>
+      <div style="height:8px"></div>
+      <input id="xferNote" placeholder="Note (optional) — damage, missing parts…" autocomplete="off">
+      <div style="height:12px"></div>
+      <button id="xferSend" style="width:100%" disabled>Upload — 0/4 photos</button>
     </div>
   </section>
 </div>
+
+<input type="file" id="camInput" accept="image/*" capture="environment" class="hide">
 <div id="toast" class="toast hide"></div>
 
 <script>
 const API = localStorage.getItem('apiBase') || 'https://tracker.eleganskyfinance.com';
 const $ = (id) => document.getElementById(id);
-// fetch with a hard timeout so a slow/dead request never hangs the UI
 const api = (path, opts = {}) => fetch(API + path, { ...opts, signal: AbortSignal.timeout(opts.timeout || 25000) });
-const show = (id) => { for (const s of ['pickView','listView','capView']) $(s).classList.toggle('hide', s !== id); };
+const VIEWS = ['roleView','pickView','receiverView','listView','queueView','capView','xferView'];
+const show = (id) => { for (const s of VIEWS) $(s).classList.toggle('hide', s !== id); };
 const toast = (m) => { const t=$('toast'); t.textContent=m; t.classList.remove('hide'); clearTimeout(t._t); t._t=setTimeout(()=>t.classList.add('hide'),2600); };
+
+const SIDES = ['front','back','left','right'];
+const SIDE_LABEL = { front:'Front', back:'Back', left:'Left', right:'Right' };
+
+let role = localStorage.getItem('role') || null;              // 'field' | 'receiver'
 let officer = JSON.parse(localStorage.getItem('officer') || 'null'); // {imei,name}
-let current = null;   // customer being captured
-let photoData = null; // dataURL
+let receiverName = localStorage.getItem('receiverName') || '';
+let current = null;   // customer being captured (visit)
+let photoData = null; // dataURL (visit)
 let pos = null;       // {lat,lng}
+// transfer state
+let xfer = null;               // {stage, plate, name}
+let xferPhotos = {};           // side -> dataURL
+let camTarget = null;          // 'visit' | side name
 
 // ---- Capacitor bridge (native) with browser fallbacks ----
 const Cap = window.Capacitor;
@@ -113,7 +187,6 @@ async function getPosition() {
   });
 }
 
-// Downscale + compress a dataURL to keep uploads small (~1024px, JPEG q0.6).
 function compress(dataUrl) {
   return new Promise((res) => {
     const img = new Image();
@@ -129,18 +202,20 @@ function compress(dataUrl) {
   });
 }
 
-// ---- offline queue ----
+// ---- offline queue (endpoint-aware) ----
 const Q = {
   all: () => JSON.parse(localStorage.getItem('queue') || '[]'),
-  set: (a) => localStorage.setItem('queue', JSON.stringify(a)),
+  set: (a) => { try { localStorage.setItem('queue', JSON.stringify(a)); } catch (e) { toast('Phone storage full — free space'); } },
   add: (item) => { const a = Q.all(); a.push(item); Q.set(a); },
 };
 async function flushQueue() {
   let a = Q.all(); if (!a.length) return;
   const keep = [];
   for (const item of a) {
+    const ep = item._ep || '/api/checkin';
+    const { _ep, ...payload } = item;
     try {
-      const r = await api('/api/checkin', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(item), timeout: 40000 });
+      const r = await api(ep, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload), timeout: 60000 });
       if (!r.ok) throw new Error('http ' + r.status);
     } catch (e) { keep.push(item); }
   }
@@ -149,23 +224,23 @@ async function flushQueue() {
 }
 function updateQueueBanner() {
   const n = Q.all().length;
-  const b = $('queueBanner');
-  if (n) { b.textContent = `⏳ ${n} check-in${n>1?'s':''} waiting to upload — will send when online`; b.classList.remove('hide'); }
-  else b.classList.add('hide');
+  for (const id of ['queueBanner','uploadBanner']) {
+    const b = $(id); if (!b) continue;
+    if (n) { b.textContent = `⏳ ${n} upload${n>1?'s':''} waiting — will send when online`; b.classList.remove('hide'); }
+    else b.classList.add('hide');
+  }
 }
 
-// ---- data ----
+// ---- data (field officer) ----
 async function loadOfficers() {
   const r = await api('/api/app/officers'); const j = await r.json();
   const sel = $('officerSel'); sel.innerHTML = '';
   for (const o of j.officers) { const opt = document.createElement('option'); opt.value = o.imei; opt.textContent = o.name; sel.appendChild(opt); }
-  // Roster tracker-ids can change; re-resolve the saved officer by NAME so a changed
-  // id never leaves the phone showing an empty list.
   if (officer) {
     const cur = j.officers.find((o) => String(o.name).toUpperCase() === String(officer.name).toUpperCase());
     if (cur && cur.imei !== officer.imei) {
       officer.imei = cur.imei; localStorage.setItem('officer', JSON.stringify(officer));
-      loadList();
+      if (role === 'field') loadList();
     }
   }
 }
@@ -189,6 +264,26 @@ async function loadList() {
   } catch (e) { $('listBody').innerHTML = '<div class="mut">Couldn\'t load — check connection and tap ↻</div>'; }
 }
 
+// ---- data (receiver) ----
+async function loadQueue() {
+  $('queueBody').innerHTML = '<div class="mut">Loading…</div>';
+  try {
+    const r = await api('/api/app/receiver-queue');
+    const j = await r.json();
+    $('queueTitle').textContent = `${j.items.length} to receive`;
+    const body = $('queueBody'); body.innerHTML = '';
+    if (!j.items.length) { body.innerHTML = '<div class="mut">No bikes waiting. Field officers haven\'t handed any in yet today.</div>'; return; }
+    for (const it of j.items) {
+      const d = document.createElement('div'); d.className = 'cust';
+      d.innerHTML = `<div class="grow"><div class="nm">${it.name || it.plate}</div><div class="pl">${it.plate} · from ${it.collectedBy||'officer'}</div></div>
+        <span class="pill pend">receive</span>`;
+      d.onclick = () => openTransfer('receiver', { plate: it.plate, name: it.name });
+      body.appendChild(d);
+    }
+  } catch (e) { $('queueBody').innerHTML = '<div class="mut">Couldn\'t load — check connection and tap ↻</div>'; }
+}
+
+// ---- visit capture (field) ----
 function openCapture(it) {
   current = it; photoData = null; pos = null;
   $('capName').textContent = it.name || it.enteredName;
@@ -200,22 +295,69 @@ function openCapture(it) {
     .catch(() => { $('gpsLine').textContent = '📍 location unavailable — enable GPS'; });
 }
 
-$('camInput').onchange = async (e) => {
-  const f = e.target.files[0]; if (!f) return;
-  const raw = await new Promise(res => { const fr = new FileReader(); fr.onload = () => res(fr.result); fr.readAsDataURL(f); });
-  photoData = await compress(raw);
-  const img = $('preview'); img.src = photoData; img.classList.remove('hide');
-  $('sendBtn').classList.remove('hide');
-};
-$('snapBtn').onclick = () => $('camInput').click();
+// ---- 4-sides transfer capture (field collect or receiver) ----
+function openTransfer(stage, target) {
+  xfer = { stage, plate: target.plate, name: target.name || '' };
+  xferPhotos = {};
+  pos = null;
+  $('xferName').textContent = xfer.name || xfer.plate;
+  $('xferPlate').textContent = xfer.plate;
+  $('xferNote').value = '';
+  $('xferStage').textContent = stage === 'field'
+    ? '🏍 Collecting bike — taking to head office'
+    : '🏭 Receiving bike at head office';
+  $('xferGps').textContent = '📍 getting location…';
+  renderSides();
+  updateXferBtn();
+  show('xferView');
+  getPosition().then(p => { pos = p; $('xferGps').textContent = `📍 location locked (±${Math.round(p.acc||0)}m)`; })
+    .catch(() => { $('xferGps').textContent = '📍 location unavailable — enable GPS'; });
+}
+function renderSides() {
+  const g = $('sidesGrid'); g.innerHTML = '';
+  for (const s of SIDES) {
+    const cell = document.createElement('div');
+    cell.className = 'side' + (xferPhotos[s] ? ' filled' : '');
+    cell.innerHTML = xferPhotos[s]
+      ? `<img src="${xferPhotos[s]}"><div class="lab">${SIDE_LABEL[s]}</div><div class="tick">✓</div>`
+      : `<div class="lab">${SIDE_LABEL[s]}</div><div class="ph">📷 tap<br>${SIDE_LABEL[s]}</div>`;
+    cell.onclick = () => { camTarget = s; $('camInput').click(); };
+    g.appendChild(cell);
+  }
+}
+function updateXferBtn() {
+  const n = SIDES.filter(s => xferPhotos[s]).length;
+  const btn = $('xferSend');
+  btn.textContent = n < 4 ? `Upload — ${n}/4 photos` : 'Upload — all 4 done ✓';
+  btn.disabled = n < 4;
+}
 
+// ---- shared camera input ----
+$('camInput').onchange = async (e) => {
+  const f = e.target.files[0]; e.target.value = ''; if (!f) return;
+  const raw = await new Promise(res => { const fr = new FileReader(); fr.onload = () => res(fr.result); fr.readAsDataURL(f); });
+  const data = await compress(raw);
+  if (camTarget === 'visit') {
+    photoData = data;
+    const img = $('preview'); img.src = data; img.classList.remove('hide');
+    $('sendBtn').classList.remove('hide');
+  } else if (camTarget) {
+    xferPhotos[camTarget] = data;
+    renderSides(); updateXferBtn();
+  }
+  camTarget = null;
+};
+$('snapBtn').onclick = () => { camTarget = 'visit'; $('camInput').click(); };
+
+// ---- visit upload ----
 $('sendBtn').onclick = async () => {
   if (!photoData) return toast('Take a photo first');
   const btn = $('sendBtn'); btn.disabled = true; btn.innerHTML = '<span class="spin"></span> uploading…';
-  const item = { officerImei: officer.imei, plate: current.plate, name: current.name || current.enteredName,
+  const item = { _ep: '/api/checkin', officerImei: officer.imei, plate: current.plate, name: current.name || current.enteredName,
     lat: pos?.lat ?? null, lng: pos?.lng ?? null, ts: Math.floor(Date.now()/1000), photo: photoData, mime: 'image/jpeg' };
   try {
-    const r = await api('/api/checkin', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(item), timeout: 40000 });
+    const { _ep, ...payload } = item;
+    const r = await api('/api/checkin', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload), timeout: 40000 });
     if (!r.ok) throw new Error('http ' + r.status);
     toast('✓ Checked in: ' + item.name);
   } catch (e) {
@@ -224,26 +366,84 @@ $('sendBtn').onclick = async () => {
   btn.disabled = false; btn.innerHTML = 'Upload check-in';
   updateQueueBanner(); show('listView'); loadList();
 };
+$('collectBtn').onclick = () => openTransfer('field', { plate: current.plate, name: current.name || current.enteredName });
 
+// ---- transfer upload (4 sides) ----
+$('xferSend').onclick = async () => {
+  const n = SIDES.filter(s => xferPhotos[s]).length;
+  if (n < 4) return toast('Take all 4 side photos first');
+  const btn = $('xferSend'); btn.disabled = true; btn.innerHTML = '<span class="spin"></span> uploading…';
+  const photos = {}; for (const s of SIDES) photos[s] = xferPhotos[s];
+  const item = {
+    _ep: '/api/transfer', stage: xfer.stage,
+    actorImei: xfer.stage === 'field' ? officer.imei : null,
+    actorName: xfer.stage === 'field' ? officer.name : receiverName,
+    plate: xfer.plate, name: xfer.name,
+    lat: pos?.lat ?? null, lng: pos?.lng ?? null, ts: Math.floor(Date.now()/1000),
+    photos, note: $('xferNote').value || '', mime: 'image/jpeg',
+  };
+  try {
+    const { _ep, ...payload } = item;
+    const r = await api('/api/transfer', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload), timeout: 90000 });
+    if (!r.ok) { const e = await r.json().catch(()=>({})); throw new Error(e.error || ('http ' + r.status)); }
+    toast('✓ ' + (xfer.stage === 'field' ? 'Bike collected' : 'Bike received') + ': ' + (xfer.name || xfer.plate));
+  } catch (e) {
+    Q.add(item); toast('Saved offline — will upload when online');
+  }
+  btn.disabled = false; updateXferBtn();
+  updateQueueBanner();
+  if (xfer.stage === 'field') { show('listView'); loadList(); }
+  else { show('queueView'); loadQueue(); }
+};
+
+// ---- role / identity nav ----
+function enterRole(r) {
+  role = r; localStorage.setItem('role', r);
+  if (r === 'field') {
+    if (officer) { $('who').textContent = officer.name; show('listView'); loadList(); }
+    else show('pickView');
+  } else {
+    if (receiverName) { $('who').textContent = receiverName + ' (receiver)'; show('queueView'); loadQueue(); }
+    else show('receiverView');
+  }
+}
+$('roleField').onclick = () => enterRole('field');
+$('roleReceiver').onclick = () => enterRole('receiver');
 $('officerGo').onclick = () => {
   const sel = $('officerSel'); officer = { imei: sel.value, name: sel.options[sel.selectedIndex].text };
   localStorage.setItem('officer', JSON.stringify(officer));
   $('who').textContent = officer.name; show('listView'); loadList();
 };
+$('receiverGo').onclick = () => {
+  const nm = $('receiverName').value.trim();
+  if (!nm) return toast('Enter your name');
+  receiverName = nm; localStorage.setItem('receiverName', nm);
+  $('who').textContent = receiverName + ' (receiver)'; show('queueView'); loadQueue();
+};
 $('refreshBtn').onclick = () => { flushQueue(); loadList(); };
+$('qRefreshBtn').onclick = () => { flushQueue(); loadQueue(); };
+$('qManual').onclick = () => {
+  const plate = (prompt('Bike plate (e.g. MC123ABC):') || '').trim();
+  if (!plate) return;
+  openTransfer('receiver', { plate, name: '' });
+};
 $('backBtn').onclick = () => show('listView');
+$('xferBack').onclick = () => show(role === 'field' ? (current ? 'capView' : 'listView') : 'queueView');
 
-// long-press the header to switch officer
-$('who').onclick = () => { if (confirm('Switch officer?')) { localStorage.removeItem('officer'); location.reload(); } };
+// tap header to switch role/identity
+$('who').onclick = () => {
+  if (!confirm('Switch role / user?')) return;
+  localStorage.removeItem('role'); localStorage.removeItem('officer'); localStorage.removeItem('receiverName');
+  location.reload();
+};
 
 // ---- boot ----
-// Draw the UI FIRST, then load data in the background — so a slow/failed request can
-// never leave the screen blank.
 window.addEventListener('online', flushQueue);
 (function boot() {
   updateQueueBanner();
-  if (officer) { $('who').textContent = officer.name; show('listView'); loadList(); }
-  else show('pickView');
+  if (role === 'field' && officer) { $('who').textContent = officer.name; show('listView'); loadList(); }
+  else if (role === 'receiver' && receiverName) { $('who').textContent = receiverName + ' (receiver)'; show('queueView'); loadQueue(); }
+  else show('roleView');
   loadOfficers().catch(() => { $('netBanner').textContent = 'No connection to server — check internet, then reopen the app'; $('netBanner').classList.remove('hide'); });
   flushQueue().catch(() => {});
 })();

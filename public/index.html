@@ -221,13 +221,37 @@ function assignSelectHtml(plate, assignedTo, suggestImei) {
   }
   return `<select onchange="if(this.value)assignCustomer('${esc(plate)}', this.value)" style="width:100%;padding:6px;margin-top:6px">${opts.join('')}</select>`;
 }
+// Small transient toast on the dashboard (bottom-center).
+function dashToast(msg, ms = 2600) {
+  let t = $('dashToast');
+  if (!t) { t = document.createElement('div'); t.id = 'dashToast'; t.style.cssText = 'position:fixed;left:50%;bottom:24px;transform:translateX(-50%);background:#111827;color:#e2e8f0;border:1px solid #334155;padding:10px 16px;border-radius:10px;font-size:13px;z-index:9999;box-shadow:0 4px 16px #0008'; document.body.appendChild(t); }
+  t.textContent = msg; t.style.display = 'block';
+  clearTimeout(t._t); t._t = setTimeout(() => { t.style.display = 'none'; }, ms);
+}
+// Assign a customer to an officer. Optimistic: the marker turns green from cache
+// IMMEDIATELY (no wait on a possibly-cold server), then the POST confirms in the
+// background and a full reload reconciles. On failure we revert + tell the supervisor.
 async function assignCustomer(plate, officerImei) {
+  map.closePopup();
+  const officerName = officerImei === 'POOL' ? '' : ((officerRoster.find((o) => o.imei === officerImei) || {}).name || officerImei);
+  // optimistic local update
+  const c = (lastCustomers || []).find((x) => x.plate === plate);
+  const prev = c ? { assigned: c.assigned, assignedTo: c.assignedTo, pool: c.pool } : null;
+  if (c) {
+    if (officerImei === 'POOL') { c.assigned = false; c.assignedTo = []; c.pool = true; }
+    else { c.assigned = true; c.assignedTo = [officerName]; c.pool = false; }
+    renderCustomers(lastCustomers);
+  }
+  dashToast(officerImei === 'POOL' ? 'Unassigning…' : `Assigning to ${officerName}…`);
   try {
-    map.closePopup();
-    const r = await fetch('/api/pool/assign', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ plate, officerImei }) });
-    if (!r.ok) { const e = await r.json().catch(() => ({})); alert('assign failed: ' + (e.error || r.status)); return; }
-    await loadCustomers();
-  } catch { alert('assign failed — check connection'); }
+    const r = await fetch('/api/pool/assign', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ plate, officerImei }), signal: AbortSignal.timeout(45000) });
+    if (!r.ok) { const e = await r.json().catch(() => ({})); throw new Error(e.error || r.status); }
+    dashToast(officerImei === 'POOL' ? '✓ Moved back to pool' : `✓ Assigned to ${officerName}`);
+    loadCustomers(); // background reconcile (don't block feedback on a slow reload)
+  } catch (err) {
+    if (c && prev) { Object.assign(c, prev); renderCustomers(lastCustomers); } // revert
+    dashToast('✗ Assign failed — try again' + (String(err.message).includes('timeout') ? ' (server slow)' : ''), 4000);
+  }
 }
 window.assignCustomer = assignCustomer;
 
@@ -308,11 +332,20 @@ async function loadLive() {
 async function loadCustomers() {
   if (!$('showCust').checked) { if (custLayer) { map.removeLayer(custLayer); custLayer = null; } return; }
   try {
-    const j = await (await fetch('/api/customers')).json();
+    // Hard timeout so a cold Render instance (30s+) never leaves the map hung.
+    const j = await (await fetch('/api/customers', { signal: AbortSignal.timeout(45000) })).json();
+    lastCustomers = j.customers || [];           // kept for optimistic assign + auto-assign
+    renderCustomers(lastCustomers);
+  } catch { /* customers optional */ }
+}
+
+// Redraw the customer layer from a list (used by loadCustomers AND for instant optimistic
+// updates after an assign, so the marker turns green without waiting for a slow reload).
+function renderCustomers(custs) {
+  if (!$('showCust').checked) return;
+  {
     if (custLayer) map.removeLayer(custLayer);
     custLayer = L.layerGroup();
-    const custs = j.customers || [];
-    lastCustomers = custs;                       // kept for the bulk auto-assign action
     const suggest = proximitySuggestions(custs); // plate → { imei, name, distM }
     let pool = 0, assigned = 0;
     for (const c of custs) {
@@ -338,7 +371,7 @@ async function loadCustomers() {
     }
     const el = $('custStat'); if (el) el.textContent = `${assigned} assigned · ${pool} in pool`;
     if (!selected) custLayer.addTo(map);
-  } catch { /* customers optional */ }
+  }
 }
 
 function renderMarkers() {

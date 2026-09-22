@@ -362,9 +362,13 @@ function renderCustomers(custs) {
       const suggestLine = sg
         ? `<div style="margin-top:5px"><button onclick="assignCustomer('${esc(c.plate)}','${esc(sg.imei)}')" style="width:100%;padding:6px;background:#2563eb;color:#fff;border:none;border-radius:4px;cursor:pointer">⭐ Assign to ${esc(sg.name)} · ${distLabel(sg.distM)}</button></div>`
         : '';
-      L.circleMarker([c.lat, c.lng], { radius: 7, color: color.color, weight: 2, fillColor: color.fill, fillOpacity: .95 })
-        .bindTooltip(label, { permanent: true, direction: 'top', className: 'lbl amt' })
-        .bindPopup(`<b>${esc(c.name)}</b><br>${c.plate}<br>Overdue: <b>TSh ${(c.amount || 0).toLocaleString()}</b>`
+      const m = L.circleMarker([c.lat, c.lng], { radius: 7, color: color.color, weight: 2, fillColor: color.fill, fillOpacity: .95 });
+      // Only POOL customers show a permanent amount label (they're the ones the supervisor
+      // is dividing up). Once assigned, the marker is just a green dot — its details show
+      // only when clicked, to keep the map uncluttered.
+      if (c.assigned) m.bindTooltip(label, { direction: 'top', className: 'lbl amt' }); // hover only
+      else m.bindTooltip(label, { permanent: true, direction: 'top', className: 'lbl amt' });
+      m.bindPopup(`<b>${esc(c.name)}</b><br>${c.plate}<br>Overdue: <b>TSh ${(c.amount || 0).toLocaleString()}</b>`
           + suggestLine
           + `<br><span style="font-size:11px;color:#64748b">Or assign to:</span>${assignSelectHtml(c.plate, c.assignedTo, sg && sg.imei)}`)
         .addTo(custLayer);

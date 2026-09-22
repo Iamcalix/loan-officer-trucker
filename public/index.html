@@ -41,6 +41,23 @@
   #summary .ok { color:#bbf7d0; }
   #manage { margin-top:8px; width:100%; padding:7px; background:var(--accent); color:#04222f; border:0; border-radius:6px; font-weight:700; cursor:pointer; }
   #followBtn { margin-top:6px; width:100%; padding:7px; background:#f59e0b; color:#3b2600; border:0; border-radius:6px; font-weight:700; cursor:pointer; }
+  #visitsBtn { margin-top:6px; width:100%; padding:7px; background:#22c55e; color:#052e16; border:0; border-radius:6px; font-weight:700; cursor:pointer; }
+  #vmodal { position:fixed; inset:0; background:rgba(2,6,23,.7); z-index:2000; display:none; align-items:center; justify-content:center; }
+  #vmodal.show { display:flex; }
+  #vpanel { width:520px; max-width:94vw; max-height:88vh; background:var(--panel); border:1px solid var(--line); border-radius:12px; display:flex; flex-direction:column; }
+  #vpanel .top { padding:12px 14px; border-bottom:1px solid var(--line); } #vpanel .top h2 { font-size:15px; margin:0; }
+  #vpanel .body { padding:12px 14px; overflow:auto; }
+  #vpanel label { font-size:12px; color:var(--mut); display:block; margin-bottom:4px; }
+  #vpanel select { width:100%; background:var(--bg); color:var(--txt); border:1px solid var(--line); border-radius:6px; padding:8px; font-size:13px; }
+  #vpanel .foot { padding:12px 14px; border-top:1px solid var(--line); display:flex; gap:10px; justify-content:flex-end; }
+  #vpanel .foot .cnt { margin-right:auto; color:var(--mut); font-size:12px; align-self:center; }
+  #vpanel button.cancel { background:transparent; color:var(--mut); border:1px solid var(--line); padding:8px 14px; border-radius:6px; cursor:pointer; }
+  #vpanel .vitem { display:flex; gap:8px; align-items:center; padding:8px 4px; border-bottom:1px solid var(--line); font-size:13px; }
+  #vpanel .vitem .grow { flex:1; min-width:0; }
+  #vpanel .vitem .amt { color:#f59e0b; font-size:12px; }
+  #vpanel .vpill { font-size:11px; padding:2px 8px; border-radius:999px; white-space:nowrap; }
+  #vpanel .vpill.done { background:#052e16; color:#86efac; } #vpanel .vpill.pend { background:#3f2d0a; color:#fcd34d; }
+  #vsum { font-size:13px; color:var(--mut); margin:2px 0 10px; }
   /* Daily follow-list modal */
   #fmodal { position:fixed; inset:0; background:rgba(2,6,23,.7); z-index:2000; display:none; align-items:center; justify-content:center; }
   #fmodal.show { display:flex; }
@@ -101,6 +118,7 @@
       <input id="search" placeholder="Search officer…" />
       <button id="manage">⚙ Manage officers</button>
       <button id="followBtn">📋 Daily follow-list</button>
+      <button id="visitsBtn">✅ Visits by officer</button>
       <a href="/report.html" style="display:block;text-align:center;margin-top:6px;padding:7px;background:var(--bg);border:1px solid var(--line);border-radius:6px;color:var(--accent);text-decoration:none;font-size:13px">📄 Day report</a>
     </div>
     <div id="list"></div>
@@ -157,6 +175,22 @@
       <span class="cnt" id="fcnt"></span>
       <button class="cancel" id="fcancel">Close</button>
       <button class="save" id="fsave">Import pool</button>
+    </div>
+  </div>
+</div>
+
+<div id="vmodal">
+  <div id="vpanel">
+    <div class="top"><h2>✅ Visits by officer — who they met from their assigned list</h2></div>
+    <div class="body">
+      <label>Field officer</label>
+      <select id="vsel"></select>
+      <div id="vsum"></div>
+      <div id="vlist"></div>
+    </div>
+    <div class="foot">
+      <span class="cnt" id="vcnt"></span>
+      <button class="cancel" id="vcancel">Close</button>
     </div>
   </div>
 </div>
@@ -746,6 +780,47 @@ function renderFollowResult(officerImei, r) {
 $('followBtn').onclick = openFollow;
 $('fcancel').onclick = () => $('fmodal').classList.remove('show');
 $('fmodal').onclick = (e) => { if (e.target.id === 'fmodal') $('fmodal').classList.remove('show'); };
+
+// ---- Visits by officer: pick a field officer, see the customers from HIS assigned list
+// that he has actually visited (plus what's still pending). Uses /api/app/followlist,
+// which already tags each assigned customer visited/pending for the day. ----
+async function openVisits() {
+  await loadOfficerRoster();
+  const sel = $('vsel');
+  sel.innerHTML = '<option value="">— select field officer —</option>'
+    + officerRoster.map((o) => `<option value="${o.imei}">${esc(o.name)}</option>`).join('');
+  $('vsum').textContent = '';
+  $('vlist').innerHTML = '';
+  $('vcnt').textContent = '';
+  $('vmodal').classList.add('show');
+}
+async function loadOfficerVisits(imei) {
+  const sum = $('vsum'), list = $('vlist');
+  if (!imei) { sum.textContent = ''; list.innerHTML = ''; $('vcnt').textContent = ''; return; }
+  sum.textContent = 'Loading…'; list.innerHTML = '';
+  try {
+    const j = await (await fetch('/api/app/followlist?imei=' + encodeURIComponent(imei), { signal: AbortSignal.timeout(45000) })).json();
+    const items = j.items || [];
+    const visited = items.filter((i) => i.visited);
+    const pending = items.filter((i) => !i.visited);
+    sum.innerHTML = `<b style="color:#86efac">${visited.length} visited</b> · ${pending.length} pending · ${items.length} assigned`;
+    $('vcnt').textContent = `${j.name || ''}`;
+    const rowHtml = (i, done) => {
+      const amt = i.amount > 0 ? `<span class="amt">TSh ${Number(i.amount).toLocaleString()}</span>` : '';
+      return `<div class="vitem"><div class="grow"><div>${esc(i.name || i.enteredName)}</div>`
+        + `<div style="color:var(--mut);font-size:12px">${esc(i.plate || 'no plate')} ${amt}</div></div>`
+        + `<span class="vpill ${done ? 'done' : 'pend'}">${done ? '✓ visited' : 'pending'}</span></div>`;
+    };
+    if (!items.length) { list.innerHTML = '<div style="color:var(--mut);padding:8px 0">No customers assigned to this officer today.</div>'; return; }
+    list.innerHTML =
+      (visited.length ? `<div style="margin:8px 0 2px;color:#86efac;font-size:12px;font-weight:700">VISITED (${visited.length})</div>` + visited.map((i) => rowHtml(i, true)).join('') : '')
+      + (pending.length ? `<div style="margin:12px 0 2px;color:#fcd34d;font-size:12px;font-weight:700">PENDING (${pending.length})</div>` + pending.map((i) => rowHtml(i, false)).join('') : '');
+  } catch { sum.textContent = 'Could not load — server slow, try again.'; }
+}
+$('visitsBtn').onclick = openVisits;
+$('vsel').onchange = (e) => loadOfficerVisits(e.target.value);
+$('vcancel').onclick = () => $('vmodal').classList.remove('show');
+$('vmodal').onclick = (e) => { if (e.target.id === 'vmodal') $('vmodal').classList.remove('show'); };
 $('fsave').onclick = async () => {
   const names = $('fnames').value.split('\n').map((s) => s.trim()).filter(Boolean);
   if (!names.length) { alert('Paste the follow-up list first.'); return; }
